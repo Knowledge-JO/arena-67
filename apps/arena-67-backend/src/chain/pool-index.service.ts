@@ -56,6 +56,13 @@ export class PoolIndexService implements OnModuleInit {
   private readonly pools = new Map<string, PoolRecord>();
   private readonly byToken = new Map<string, Set<string>>();
   private readonly meta = new Map<string, TokenMeta>();
+  /**
+   * poolId -> PoolKey, for pools outside the backfill window. A PoolKey is
+   * immutable once initialised, so this never needs invalidating. A null entry
+   * means the chain confirmed no such pool — cached too, since that answer
+   * cannot change either.
+   */
+  private readonly resolved = new Map<string, PoolRecord | null>();
   private lastBlock = 0n;
   private ready = false;
 
@@ -151,6 +158,108 @@ export class PoolIndexService implements OnModuleInit {
       if (pair.includes(y)) out.push(p);
     }
     return out.sort((p, q) => (q.block > p.block ? 1 : -1));
+  }
+
+  /**
+   * Recovers a pool's key from its id, looking beyond the indexed window.
+   *
+   * The index only holds a rolling ~5.6h of pool creations, but Dexscreener
+   * happily reports pools years older — microduck's deepest venue was created
+   * at block 47.4M against a hook, which no amount of tier-guessing would
+   * reconstruct. A poolId is keccak(PoolKey) and cannot be reversed, but
+   * `Initialize` declares `id` as an indexed topic, so one filtered getLogs
+   * over the full range recovers the key in around two seconds.
+   *
+   * Throws on RPC failure rather than returning null: "the chain says no such
+   * pool" and "we could not ask" must not collapse into the same answer, or a
+   * network blip would be cached as a permanent negative.
+   */
+  async resolveById(poolId: string): Promise<PoolRecord | null> {
+    const key = poolId.toLowerCase();
+
+    const indexed = this.pools.get(poolId) ?? this.pools.get(key);
+    if (indexed) return indexed;
+
+    if (this.resolved.has(key)) return this.resolved.get(key) ?? null;
+
+    const logs = await this.chain.client.getLogs({
+      address: this.chain.network.uniswapV4.POOL_MANAGER,
+      event: INITIALIZE_EVENT,
+      args: { id: key as `0x${string}` },
+      fromBlock: 0n,
+      toBlock: 'latest',
+    });
+
+    const found = logs[0];
+    if (!found) {
+      this.resolved.set(key, null);
+      return null;
+    }
+
+    const a = found.args as {
+      currency0: Address;
+      currency1: Address;
+      fee: number;
+      tickSpacing: number;
+      hooks: Address;
+    };
+    const record: PoolRecord = {
+      id: poolId,
+      currency0: a.currency0,
+      currency1: a.currency1,
+      fee: Number(a.fee),
+      tickSpacing: Number(a.tickSpacing),
+      hooks: a.hooks,
+      block: found.blockNumber ?? 0n,
+    };
+
+    this.resolved.set(key, record);
+    this.log.debug(`resolved pool ${key.slice(0, 12)}… from block ${record.block}`);
+    return record;
+  }
+
+  /**
+   * Resolves a pool and proves it actually trades the token in hand.
+   *
+   * The poolId reaches us from the browser, having originally come from a
+   * third-party API. Neither is grounds to sign against it. Checking that the
+   * recovered key really contains this token is what stops a swapped id
+   * pointing the trade at a different pair — the id is opaque, so nothing
+   * about it looks wrong until the funds have moved.
+   */
+  async resolveForToken(poolId: string, token: Address): Promise<PoolRecord> {
+    const pool = await this.resolveById(poolId);
+    if (!pool) throw new Error('That pool does not exist on this chain.');
+
+    const want = token.toLowerCase();
+    const pair = [pool.currency0.toLowerCase(), pool.currency1.toLowerCase()];
+    if (!pair.includes(want)) {
+      this.log.warn(`pool ${poolId.slice(0, 12)}… does not trade ${token}`);
+      throw new Error('That pool does not trade this token.');
+    }
+    return pool;
+  }
+
+  /** Every indexed pool that touches this token, regardless of the other side. */
+  poolsForToken(token: Address): PoolRecord[] {
+    const ids = this.byToken.get(token.toLowerCase());
+    if (!ids) return [];
+    const out: PoolRecord[] = [];
+    for (const id of ids) {
+      const p = this.pools.get(id);
+      if (p) out.push(p);
+    }
+    return out.sort((a, b) => (b.block > a.block ? 1 : -1));
+  }
+
+  /** Cached ERC-20 metadata, if this token has been hydrated. */
+  metaOf(token: Address): TokenMeta | undefined {
+    return this.meta.get(token.toLowerCase());
+  }
+
+  symbolOf(token: Address): string | undefined {
+    if (token.toLowerCase() === NATIVE_TOKEN.toLowerCase()) return 'ETH';
+    return this.meta.get(token.toLowerCase())?.symbol;
   }
 
   /**

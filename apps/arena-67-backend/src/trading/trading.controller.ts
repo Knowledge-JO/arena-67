@@ -47,6 +47,12 @@ const ConfirmBody = SessionBody.extend({
   intentId: z.string().uuid(),
   quoteId: z.string().uuid(),
 });
+const SelectPoolBody = SessionBody.extend({
+  intentId: z.string().uuid(),
+  /** 32-byte Uniswap v4 poolId. */
+  poolId: z.string().regex(/^0x[a-fA-F0-9]{64}$/, 'Must be a 32-byte pool id'),
+});
+const RequoteBody = SessionBody.extend({ intentId: z.string().uuid() });
 
 @Controller('trade')
 export class TradingController {
@@ -83,6 +89,20 @@ export class TradingController {
   amount(@Body() body: unknown): Promise<TradeStep> {
     const { sessionId, intentId, amount } = parse(AmountBody, body);
     return this.trading.setAmount(sessionId, intentId, amount);
+  }
+
+  @Post('select-pool')
+  @HttpCode(200)
+  selectPool(@Body() body: unknown): Promise<TradeStep> {
+    const { sessionId, intentId, poolId } = parse(SelectPoolBody, body);
+    return this.trading.selectPool(sessionId, intentId, poolId);
+  }
+
+  @Post('requote')
+  @HttpCode(200)
+  requote(@Body() body: unknown): Promise<TradeStep> {
+    const { sessionId, intentId } = parse(RequoteBody, body);
+    return this.trading.requote(sessionId, intentId);
   }
 
   @Post('confirm')

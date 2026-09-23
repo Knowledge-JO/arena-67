@@ -130,8 +130,31 @@ export class ArenaAgentService implements OnModuleInit, OnModuleDestroy {
           `Reply with the address you want. Trade id: ${step.intentId}`,
         ].join('\n');
       case 'need_token':
-      case 'need_amount':
         return `${step.message} (trade id: ${step.intentId})`;
+      case 'token_detail': {
+        const lines = [step.message];
+        if (step.stats?.priceUsd != null) {
+          const s = step.stats;
+          lines.push(
+            `${step.token.symbol} — $${s.priceUsd}` +
+              (s.priceChange24h != null ? ` (${s.priceChange24h > 0 ? '+' : ''}${s.priceChange24h}% 24h)` : '') +
+              (s.marketCap != null ? `, cap $${Math.round(s.marketCap).toLocaleString()}` : ''),
+          );
+        }
+        if (step.degraded) {
+          lines.push('No market data for this token yet — pool list is from chain state only.');
+        }
+        lines.push(
+          ...step.pools.map(
+            (p) =>
+              `- ${step.token.symbol}/${p.quoteSymbol}` +
+              (p.liquidityUsd ? ` — $${Math.round(p.liquidityUsd).toLocaleString()} liquidity` : '') +
+              `  ${p.poolId}`,
+          ),
+        );
+        lines.push(`Trade id: ${step.intentId}`);
+        return lines.join('\n');
+      }
       case 'confirm':
         return [
           step.message,

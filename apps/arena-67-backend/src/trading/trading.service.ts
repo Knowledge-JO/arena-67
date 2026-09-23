@@ -8,8 +8,10 @@ import { TokensService } from './tokens.service';
 import { WalletService } from '../wallet/wallet.service';
 import { NATIVE_TOKEN, explorerTxUrl, type BaseToken } from '../chain/networks';
 import { ChainService } from '../chain/chain.service';
-import { PoolIndexService } from '../chain/pool-index.service';
+import { PoolIndexService, type PoolRecord } from '../chain/pool-index.service';
 import type { TradeIntent } from '../openserv/schemas';
+import { MarketService } from '../market/market.service';
+import type { TokenLink, TokenMarket, TokenPool, TokenStats } from '../market/market.types';
 
 /** What the orchestrator hands back to the chat on every turn. */
 export type TradeStep =
@@ -20,7 +22,31 @@ export type TradeStep =
       message: string;
       candidates: PendingIntent['candidates'];
     }
-  | { kind: 'need_amount'; intentId: string; symbol: string; message: string }
+  | {
+      /**
+       * The token page: everything needed to decide, including which venue.
+       * Replaces `need_amount`, which carried only a symbol — not enough to
+       * judge whether a contract is worth money.
+       */
+      kind: 'token_detail';
+      intentId: string;
+      token: {
+        address: string;
+        symbol: string;
+        name: string;
+        decimals: number;
+        imageUrl: string | null;
+        websites: TokenLink[];
+        socials: TokenLink[];
+      };
+      stats: TokenStats | null;
+      pools: TokenPool[];
+      /** Set once a venue is chosen, so the card can show it selected. */
+      selectedPoolId?: string;
+      /** True when Dexscreener knew nothing and this is chain data only. */
+      degraded: boolean;
+      message: string;
+    }
   | {
       kind: 'confirm';
       intentId: string;
@@ -52,6 +78,7 @@ export class TradingService {
     private readonly config: ConfigService,
     private readonly chain: ChainService,
     private readonly index: PoolIndexService,
+    private readonly market: MarketService,
   ) {}
 
   /** Entry point for a fresh trade intent extracted by the OpenServ runtime. */
@@ -98,16 +125,69 @@ export class TradingService {
       };
     }
 
-    if (!intent.amount) {
-      return {
-        kind: 'need_amount',
-        intentId: intent.id,
-        symbol: intent.token.symbol,
-        message: `How much do you want to ${intent.action}?`,
-      };
+    // A venue must be chosen before a price means anything, and the amount is
+    // meaningless without knowing what it buys. Both gates land on the token
+    // page rather than a bare prompt.
+    if (!intent.pool || !intent.amount) {
+      return this.tokenPage(sessionId, intent.id);
     }
 
     return this.priceIt(sessionId, intent.id);
+  }
+
+  /**
+   * Builds the token page: identity, market stats, and the tradeable venues.
+   *
+   * Market data is fetched once per intent and cached on it. The page is
+   * re-rendered on every step of the pick-a-pool dance, and re-querying an
+   * upstream on each of those would be both slow and rude.
+   */
+  private async tokenPage(
+    sessionId: string,
+    intentId: string,
+  ): Promise<TradeStep> {
+    const intent = this.store.get(intentId, sessionId);
+    const token = intent.token!;
+
+    let market: TokenMarket | null = intent.market ?? null;
+    if (!market) {
+      market = await this.market.forToken(token.address);
+      if (market) this.store.patch(intentId, sessionId, { market });
+    }
+
+    const pools = market?.pools ?? [];
+    if (pools.length === 0) {
+      return {
+        kind: 'rejected',
+        message: `I cannot find a Uniswap v4 pool for ${token.symbol} on this chain, so there is nothing to trade against.`,
+      };
+    }
+
+    const chosen = intent.pool?.id;
+    const message = chosen
+      ? `How much do you want to ${intent.action}?`
+      : pools.length === 1
+        ? `${token.symbol} trades against ${pools[0].quoteSymbol}. Pick it to continue.`
+        : `${token.symbol} trades on ${pools.length} venues. Which one?`;
+
+    return {
+      kind: 'token_detail',
+      intentId,
+      token: {
+        address: token.address,
+        symbol: market?.symbol || token.symbol,
+        name: market?.name || token.name,
+        decimals: token.decimals,
+        imageUrl: market?.imageUrl ?? null,
+        websites: market?.websites ?? [],
+        socials: market?.socials ?? [],
+      },
+      stats: market?.stats ?? null,
+      pools,
+      selectedPoolId: chosen,
+      degraded: market?.degraded ?? true,
+      message,
+    };
   }
 
   async selectToken(
@@ -116,6 +196,42 @@ export class TradingService {
     candidateId: string,
   ): Promise<TradeStep> {
     this.store.selectCandidate(intentId, sessionId, candidateId);
+    return this.advance(sessionId, intentId);
+  }
+
+  /**
+   * Pins the venue for this trade.
+   *
+   * `resolveForToken` both recovers the PoolKey and proves the pool actually
+   * trades this token — the poolId arrives from the browser having originated
+   * at a third-party API, and an opaque id pointing at the wrong pair would
+   * look like nothing until the funds moved.
+   */
+  async selectPool(
+    sessionId: string,
+    intentId: string,
+    poolId: string,
+  ): Promise<TradeStep> {
+    const intent = this.store.get(intentId, sessionId);
+    const token = intent.token;
+    if (!token) {
+      return { kind: 'rejected', message: 'Pick a token first.' };
+    }
+
+    // Only offer what the page offered; an id from nowhere is not a venue.
+    const listed = intent.market?.pools.some((p) => p.poolId === poolId);
+    if (!listed) {
+      return { kind: 'rejected', message: 'That is not one of the listed pools.' };
+    }
+
+    let pool;
+    try {
+      pool = await this.index.resolveForToken(poolId, token.address);
+    } catch (err) {
+      return { kind: 'rejected', message: (err as Error).message };
+    }
+
+    this.store.patch(intentId, sessionId, { pool });
     return this.advance(sessionId, intentId);
   }
 
@@ -140,7 +256,11 @@ export class TradingService {
     // A buy spends the funding asset; a sell spends the token and receives it.
     const buying = intent.action === 'buy';
 
-    const picked = this.pickFunding(token.address, intent.currency);
+    // The venue decides the funding asset: the other side of the chosen pool
+    // is what a buy spends, by definition. Re-deriving it from preferences
+    // could name an asset this pool does not even trade.
+    const pool = intent.pool!;
+    const picked = await this.fundingForPool(pool, token.address);
     if ('error' in picked) return { kind: 'rejected', message: picked.error };
     const funding = picked.token;
 
@@ -200,6 +320,7 @@ export class TradingService {
         tokenOut,
         amountIn,
         maxSlippageBps: this.config.getOrThrow<number>('MAX_SLIPPAGE_BPS'),
+        pool,
       });
     } catch (err) {
       return { kind: 'rejected', message: (err as Error).message };
@@ -221,6 +342,7 @@ export class TradingService {
         receive: `~${formatUnits(quote.amountOut, decimalsOut)} ${buying ? token.symbol : funding.symbol}`,
         guaranteedMinimum: `${formatUnits(quote.minAmountOut, decimalsOut)} ${buying ? token.symbol : funding.symbol}`,
         poolFee: `${quote.feeTier / 10_000}%`,
+        venue: `${token.symbol}/${funding.symbol}`,
       },
     };
   }
@@ -312,61 +434,75 @@ export class TradingService {
   }
 
   /**
-   * Chooses what a buy actually spends, from the pools that exist.
+   * The funding asset is whatever sits on the other side of the chosen pool.
    *
-   * USDG was hardcoded here, which measurement proved wrong: microduck has 225
-   * pools on mainnet and every one of them pairs against native ETH. Memecoins
-   * quote in ETH on this chain; USDG is mostly for stock tokens and stables.
-   * So the funding asset is picked by looking for a pool, not by assumption.
+   * v1 picked this from the user's stated currency and a pool search, which
+   * could name an asset the selected venue does not trade. Once a venue is
+   * pinned there is no choice left to make: a MAKER/USDG pool spends USDG.
    *
-   * When the user *names* a currency and no pool exists for it, this refuses
-   * rather than substituting. Silently re-reading "25 USDG" as 25 ETH would
-   * turn a $25 order into a $68,000 one — a substitution is never safe when
-   * the number stays the same and only the unit moves.
+   * Decimals come from the network's known base assets where possible and are
+   * read from the contract otherwise — getting them wrong is not a rounding
+   * error, since USDG has 6 and ETH has 18.
    */
-  private pickFunding(
+  private async fundingForPool(
+    pool: PoolRecord,
     token: `0x${string}`,
-    currency?: string,
-  ): { token: BaseToken } | { error: string } {
-    const { baseTokens, funding } = this.chain.network;
-    const named = currency?.trim().toUpperCase();
+  ): Promise<{ token: BaseToken } | { error: string }> {
+    const self = token.toLowerCase();
+    const other = (
+      pool.currency0.toLowerCase() === self ? pool.currency1 : pool.currency0
+    ) as `0x${string}`;
 
-    if (named) {
-      const asked = baseTokens[named];
-      if (!asked) {
-        return {
-          error: `I do not trade ${named} as a funding asset on this network.`,
-        };
-      }
-      if (this.index.poolsFor(asked.address, token).length === 0) {
-        const alt = this.fundingWithPools(token);
-        return {
-          error:
-            `There is no ${asked.symbol} pool for that token` +
-            (alt ? `. It trades against ${alt.symbol} — try that instead.` : '.'),
-        };
-      }
-      return { token: asked };
+    if (other.toLowerCase() === NATIVE_TOKEN.toLowerCase()) {
+      return { token: { address: NATIVE_TOKEN, symbol: 'ETH', decimals: 18 } };
     }
 
-    const found = this.fundingWithPools(token);
-    return { token: found ?? funding };
+    const known = Object.values(this.chain.network.baseTokens).find(
+      (b) => b.address.toLowerCase() === other.toLowerCase(),
+    );
+    if (known) return { token: { ...known } };
+
+    const described = await this.tokens.describe(other);
+    if (!described) {
+      return { error: 'I cannot read the other side of that pool.' };
+    }
+    return {
+      token: {
+        address: described.address,
+        symbol: described.symbol,
+        decimals: described.decimals,
+      },
+    };
   }
 
-  /** The base asset with the deepest pool coverage against this token. */
-  private fundingWithPools(token: `0x${string}`): BaseToken | null {
-    const seen = new Set<string>();
-    let best: { token: BaseToken; pools: number } | null = null;
-    for (const candidate of Object.values(this.chain.network.baseTokens)) {
-      const key = candidate.address.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const pools = this.index.poolsFor(candidate.address, token).length;
-      if (pools > 0 && (!best || pools > best.pools)) {
-        best = { token: candidate, pools };
-      }
+  /**
+   * Re-prices a quote that went stale, on the same venue.
+   *
+   * Expiry used to be a dead end: the card disabled itself and the only way
+   * forward was to start the trade over. The new quote gets a new id, which
+   * retires the old one — a stale card left open in another tab must not stay
+   * confirmable.
+   */
+  async requote(sessionId: string, intentId: string): Promise<TradeStep> {
+    const intent = this.store.get(intentId, sessionId);
+
+    if (intent.status === 'executing' || intent.status === 'executed') {
+      return {
+        kind: 'rejected',
+        message: 'That trade has already been sent; there is nothing to re-price.',
+      };
     }
-    return best?.token ?? null;
+    if (!intent.token || !intent.pool || !intent.amount) {
+      return { kind: 'rejected', message: 'That trade is incomplete. Start again.' };
+    }
+
+    // Back to collecting so the old quote id can no longer be claimed while
+    // the new price is being fetched.
+    this.store.patch(intentId, sessionId, {
+      status: 'collecting',
+      quote: undefined,
+    });
+    return this.priceIt(sessionId, intentId);
   }
 
   /**

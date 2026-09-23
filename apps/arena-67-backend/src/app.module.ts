@@ -4,6 +4,7 @@ import { validateEnv } from './config/env.validation';
 import { ChainModule } from './chain/chain.module';
 import { WalletModule } from './wallet/wallet.module';
 import { TradingModule } from './trading/trading.module';
+import { MarketModule } from './market/market.module';
 import { OpenServModule } from './openserv/openserv.module';
 import { ResearchModule } from './research/research.module';
 
@@ -11,6 +12,7 @@ import { ResearchModule } from './research/research.module';
   imports: [
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
     ChainModule,
+    MarketModule,
     WalletModule,
     TradingModule,
     ResearchModule,

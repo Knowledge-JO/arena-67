@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { TradeIntent } from '../openserv/schemas';
+import type { PoolRecord } from '../chain/pool-index.service';
+import type { TokenMarket } from '../market/market.types';
 
 export interface TokenCandidate {
   /** Opaque id the client echoes back. The raw address never round-trips. */
@@ -25,6 +27,8 @@ export interface Quote {
   feeTier: number;
   tickSpacing: number;
   hooks: `0x${string}`;
+  /** The venue this price came from; the swap must use this exact pool. */
+  poolId: string;
   quotedAt: number;
 }
 
@@ -48,6 +52,10 @@ export interface PendingIntent {
   token?: TokenCandidate;
   /** The asset the quote was priced in; re-deriving it at confirm could differ. */
   funding?: { address: `0x${string}`; symbol: string; decimals: number };
+  /** Venue chosen on the token page, if any. Pinned through to the swap. */
+  pool?: PoolRecord;
+  /** Market view backing the token page, cached for the session. */
+  market?: TokenMarket;
   quote?: Quote;
   txHash?: `0x${string}`;
   error?: string;
