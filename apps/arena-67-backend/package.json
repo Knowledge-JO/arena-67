@@ -1,5 +1,5 @@
 {
-  "name": "arena-8004-backend",
+  "name": "arena-67-backend",
   "version": "0.0.1",
   "description": "",
   "author": "",
@@ -20,11 +20,21 @@
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "dependencies": {
+    "@coinbase/agentkit": "^0.10.4",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@nestjs/common": "^11.0.1",
+    "@nestjs/config": "^12.0.0",
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/platform-socket.io": "^11.2.5",
+    "@nestjs/schedule": "^12.0.2",
+    "@nestjs/websockets": "^11.2.5",
+    "@openserv-labs/sdk": "^2.4.1",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "socket.io": "^4.8.3",
+    "viem": "2.38.3",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

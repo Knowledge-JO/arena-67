@@ -1,0 +1,246 @@
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { parseAbiItem, type Address } from 'viem';
+import { ChainService } from './chain.service';
+import { NATIVE_TOKEN } from './networks';
+import { ERC20_ABI } from '../trading/uniswap-v4.abi';
+
+export const INITIALIZE_EVENT = parseAbiItem(
+  'event Initialize(bytes32 indexed id, address indexed currency0, address indexed currency1, uint24 fee, int24 tickSpacing, address hooks, uint160 sqrtPriceX96, int24 tick)',
+);
+
+export interface PoolRecord {
+  id: string;
+  currency0: Address;
+  currency1: Address;
+  fee: number;
+  tickSpacing: number;
+  hooks: Address;
+  block: bigint;
+}
+
+export interface TokenMeta {
+  address: Address;
+  symbol: string;
+  name: string;
+  decimals: number;
+  poolCount: number;
+}
+
+const CHUNK = 100_000n;
+
+/**
+ * An index of live Uniswap v4 pools, built by replaying the PoolManager's
+ * Initialize events.
+ *
+ * This replaces guessing at fee tiers, which measurement showed does not work
+ * on this chain. Over a 1,929-pool sample, only 12% were reachable by probing
+ * the canonical tiers with no hook:
+ *
+ *   - 31% of pools use fee 0x800000, the v4 dynamic-fee flag, where the real
+ *     fee lives in a hook rather than the PoolKey.
+ *   - 38% attach a hook at all, and a hookless probe cannot see any of them.
+ *   - fee and tickSpacing do not pair canonically here. Plenty of pools run
+ *     fee 500 with tickSpacing 1 rather than the usual 10, and launchpad
+ *     pools use combinations like fee 810000 / tickSpacing 19988.
+ *
+ * Reading the pools that actually exist sidesteps all of that, and gives
+ * ticker search for free: a token is discoverable precisely when something
+ * has opened a market for it.
+ */
+@Injectable()
+export class PoolIndexService implements OnModuleInit {
+  private readonly log = new Logger(PoolIndexService.name);
+
+  private readonly pools = new Map<string, PoolRecord>();
+  private readonly byToken = new Map<string, Set<string>>();
+  private readonly meta = new Map<string, TokenMeta>();
+  private lastBlock = 0n;
+  private ready = false;
+
+  constructor(
+    private readonly chain: ChainService,
+    private readonly config: ConfigService,
+  ) {}
+
+  async onModuleInit(): Promise<void> {
+    const head = await this.chain.client.getBlockNumber();
+    const span = BigInt(this.config.get<number>('POOL_INDEX_SPAN') ?? 200_000);
+    // Backfill runs unawaited: a cold index should not hold up the API, and
+    // every read path already copes with an index that is still filling.
+    void this.scan(head - span, head)
+      .then(() => {
+        this.ready = true;
+        this.log.log(
+          `pool index ready — ${this.pools.size} pools, ${this.byToken.size} tokens`,
+        );
+      })
+      .catch((e) => this.log.error(`initial pool scan failed: ${e.message}`));
+  }
+
+  /** Catches up from the last indexed block. Cheap once warm. */
+  @Cron(CronExpression.EVERY_MINUTE)
+  async catchUp(): Promise<void> {
+    if (!this.lastBlock) return;
+    try {
+      const head = await this.chain.client.getBlockNumber();
+      if (head > this.lastBlock) await this.scan(this.lastBlock + 1n, head);
+    } catch (e) {
+      this.log.warn(`pool index catch-up failed: ${(e as Error).message}`);
+    }
+  }
+
+  private async scan(from: bigint, to: bigint): Promise<void> {
+    for (let start = from; start <= to; start += CHUNK) {
+      const end = start + CHUNK - 1n > to ? to : start + CHUNK - 1n;
+      try {
+        const logs = await this.chain.client.getLogs({
+          address: this.chain.network.uniswapV4.POOL_MANAGER,
+          event: INITIALIZE_EVENT,
+          fromBlock: start,
+          toBlock: end,
+        });
+        for (const l of logs) {
+          const a = l.args as {
+            id: string;
+            currency0: Address;
+            currency1: Address;
+            fee: number;
+            tickSpacing: number;
+            hooks: Address;
+          };
+          const rec: PoolRecord = {
+            id: a.id,
+            currency0: a.currency0,
+            currency1: a.currency1,
+            fee: Number(a.fee),
+            tickSpacing: Number(a.tickSpacing),
+            hooks: a.hooks,
+            block: l.blockNumber ?? 0n,
+          };
+          this.pools.set(rec.id, rec);
+          this.link(rec.currency0, rec.id);
+          this.link(rec.currency1, rec.id);
+        }
+      } catch (e) {
+        // One bad chunk should not abandon the whole backfill.
+        this.log.warn(`chunk ${start}-${end} failed: ${(e as Error).message}`);
+      }
+      this.lastBlock = end;
+    }
+  }
+
+  private link(token: Address, poolId: string): void {
+    const k = token.toLowerCase();
+    let set = this.byToken.get(k);
+    if (!set) this.byToken.set(k, (set = new Set()));
+    set.add(poolId);
+  }
+
+  /** Every indexed pool trading this exact pair, most recent first. */
+  poolsFor(a: Address, b: Address): PoolRecord[] {
+    const [x, y] = [a.toLowerCase(), b.toLowerCase()];
+    const ids = this.byToken.get(x);
+    if (!ids) return [];
+    const out: PoolRecord[] = [];
+    for (const id of ids) {
+      const p = this.pools.get(id);
+      if (!p) continue;
+      const pair = [p.currency0.toLowerCase(), p.currency1.toLowerCase()];
+      if (pair.includes(y)) out.push(p);
+    }
+    return out.sort((p, q) => (q.block > p.block ? 1 : -1));
+  }
+
+  /**
+   * Ticker search over indexed tokens. Exact symbol matches rank above
+   * prefixes, then by how many pools reference the token — a rough but honest
+   * proxy for "which Trump did you mean", since the contract nobody has opened
+   * a market for is rarely the one being asked about.
+   */
+  async search(query: string, limit = 8): Promise<TokenMeta[]> {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    await this.hydrate([...this.byToken.keys()] as Address[]);
+
+    const scored: Array<{ m: TokenMeta; score: number }> = [];
+    for (const m of this.meta.values()) {
+      const sym = m.symbol.toLowerCase();
+      const name = m.name.toLowerCase();
+      let score = 0;
+      if (sym === q) score = 100;
+      else if (name === q) score = 90;
+      else if (sym.startsWith(q)) score = 70;
+      else if (name.startsWith(q)) score = 60;
+      else if (sym.includes(q) || name.includes(q)) score = 40;
+      if (score) scored.push({ m, score });
+    }
+    return scored
+      .sort((a, b) => b.score - a.score || b.m.poolCount - a.m.poolCount)
+      .slice(0, limit)
+      .map((s) => s.m);
+  }
+
+  /** Tokens with the most pools opened against them. Feeds the arena panel. */
+  async hottest(limit = 12): Promise<TokenMeta[]> {
+    const ranked = [...this.byToken.entries()]
+      .filter(([addr]) => addr !== NATIVE_TOKEN.toLowerCase())
+      .sort((a, b) => b[1].size - a[1].size)
+      .slice(0, limit * 2)
+      .map(([addr]) => addr as Address);
+    await this.hydrate(ranked);
+    return ranked
+      .map((a) => this.meta.get(a.toLowerCase()))
+      .filter((m): m is TokenMeta => !!m)
+      .slice(0, limit);
+  }
+
+  /** Batch-reads ERC-20 metadata through Multicall3, caching as it goes. */
+  private async hydrate(tokens: Address[]): Promise<void> {
+    const todo = tokens.filter(
+      (t) =>
+        !this.meta.has(t.toLowerCase()) &&
+        t.toLowerCase() !== NATIVE_TOKEN.toLowerCase(),
+    );
+    if (!todo.length) return;
+
+    for (let i = 0; i < todo.length; i += 100) {
+      const batch = todo.slice(i, i + 100);
+      try {
+        const results = await this.chain.client.multicall({
+          multicallAddress: this.chain.network.multicall3,
+          allowFailure: true,
+          contracts: batch.flatMap((address) => [
+            { address, abi: ERC20_ABI, functionName: 'symbol' } as const,
+            { address, abi: ERC20_ABI, functionName: 'name' } as const,
+            { address, abi: ERC20_ABI, functionName: 'decimals' } as const,
+          ]),
+        });
+        batch.forEach((address, n) => {
+          const [s, nm, d] = results.slice(n * 3, n * 3 + 3);
+          if (s.status !== 'success' || d.status !== 'success') return;
+          this.meta.set(address.toLowerCase(), {
+            address,
+            symbol: String(s.result),
+            name: nm.status === 'success' ? String(nm.result) : String(s.result),
+            decimals: Number(d.result),
+            poolCount: this.byToken.get(address.toLowerCase())?.size ?? 0,
+          });
+        });
+      } catch (e) {
+        this.log.warn(`metadata batch failed: ${(e as Error).message}`);
+      }
+    }
+  }
+
+  stats() {
+    return {
+      ready: this.ready,
+      pools: this.pools.size,
+      tokens: this.byToken.size,
+      hydrated: this.meta.size,
+      lastBlock: this.lastBlock.toString(),
+    };
+  }
+}

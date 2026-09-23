@@ -1,0 +1,87 @@
+@import "tailwindcss";
+
+/*
+ * Dark-first. This is a surface people stare at for a long time, and the
+ * light theme is the exception rather than the default.
+ */
+:root {
+  --bg: #08090b;
+  --surface: #0e1013;
+  --surface-raised: #15181d;
+  --border: #23272e;
+  --border-strong: #333942;
+  --fg: #e8eaed;
+  --fg-muted: #9aa1ac;
+  --fg-subtle: #6b7280;
+  --accent: #5b8cff;
+  --accent-fg: #ffffff;
+  --positive: #3ecf8e;
+  --negative: #ff6b6b;
+  --warning: #f0b429;
+}
+
+:root[data-theme="light"] {
+  --bg: #fbfbfc;
+  --surface: #ffffff;
+  --surface-raised: #f4f5f7;
+  --border: #e4e6ea;
+  --border-strong: #cfd3da;
+  --fg: #14161a;
+  --fg-muted: #5c636e;
+  --fg-subtle: #878e99;
+  --accent: #2f6bff;
+  --accent-fg: #ffffff;
+  --positive: #0f9d63;
+  --negative: #d93a3a;
+  --warning: #b8860b;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-border-base: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-positive: var(--positive);
+  --color-negative: var(--negative);
+  --color-warning: var(--warning);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+html, body { height: 100%; }
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Lenis drives the research pane; without this it fights native momentum. */
+html.lenis, html.lenis body { height: auto; }
+.lenis.lenis-smooth { scroll-behavior: auto !important; }
+
+::selection { background: color-mix(in oklab, var(--accent) 30%, transparent); }
+
+.scroll-thin { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+.scroll-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: var(--border-strong); border-radius: 999px;
+}
+.scroll-thin::-webkit-scrollbar-track { background: transparent; }
+
+/* Motion is informational here, so removing it costs nothing but the polish. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
