@@ -1,159 +1,113 @@
-# Turborepo starter
+# Arena 67
 
-This Turborepo starter is maintained by the Turborepo core team.
+A chat-driven trading desk for Uniswap v4 pools: a small language model reads
+your intent, the desk prices it, and asks for explicit confirmation before
+anything touching the wallet.
 
-## Using this example
+Built with a Turborepo monorepo. Two apps:
 
-Run the following command:
+- `apps/arena-67-backend` - NestJS desk on port 9000. Owns the agent wallet,
+  the pending-intent store, quotes, and execution. It uses a Coinbase CDP
+  TEE-held signer and swaps through the Uniswap Universal Router (Permit2).
+- `apps/arena-67-ui` - Next.js 16 chat interface on port 3000. It speaks to
+  the backend over a small REST API and never sees wallet keys or private
+  addresses.
 
-```sh
-npx create-turbo@latest
-```
+There is also a shared `@repo/ui` package, used by the UI.
 
-## What's inside?
+## Safety model
 
-This Turborepo includes the following packages/apps:
+The desk treats every trade as untrusted until the user confirms it.
 
-### Apps and Packages
+- Intent ids, candidate ids, and quote ids are opaque. The backend never
+  lets the UI hand back an address learned from a card.
+- Pending intents live in a server-side store keyed by session. Only the
+  session that created an intent may advance or read it.
+- Quotes are short-lived (TTL) and bound to one intent. A quote can only be
+  confirmed by the same session through its opaque quote id.
+- `claimForExecution` on the store is idempotent, so a double confirm cannot
+  fire two swaps.
+- `MAX_TRADE_USD` caps the dollar value of any single trade. `MAX_SLIPPAGE_BPS`
+  caps how far the fill may move from the quote.
+- The default network is mainnet: on mainnet every confirmed trade moves real
+  funds. For development use the testnet.
 
-- `docs`: a [Next.js](https://nextjs.org/) app
-- `web`: another [Next.js](https://nextjs.org/) app
-- `@repo/ui`: a stub React component library shared by both `web` and `docs` applications
-- `@repo/eslint-config`: `eslint` configurations (includes `@next/eslint-plugin-next` and `eslint-config-prettier`)
-- `@repo/typescript-config`: `tsconfig.json`s used throughout the monorepo
+## Prerequisites
 
-Each package/app is 100% [TypeScript](https://www.typescriptlang.org/).
+- Node 24.9+ (npm is pinned in `devEngines`)
+- A Coinbase CDP wallet with an API key (for the testnet / mainnet signer)
+- Rust is not required; the Solana/`secp256k1` native modules are prebuilt
 
-### Utilities
-
-This Turborepo has some additional tools already setup for you:
-
-- [TypeScript](https://www.typescriptlang.org/) for static type checking
-- [ESLint](https://eslint.org/) for code linting
-- [Prettier](https://prettier.io) for code formatting
-
-### Build
-
-To build all apps and packages, run the following command:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo build
-```
-
-Without global `turbo`, use your package manager:
+Install once from the repo root:
 
 ```sh
-cd my-turborepo
-npx turbo build
-npm exec turbo build
-npm exec turbo build
+npm install
 ```
 
-You can build a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+## Setup
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
+Copy the backend env scaffold and fill in the secrets:
 
 ```sh
-turbo build --filter=docs
+cp apps/arena-67-backend/.env.example apps/arena-67-backend/.env
 ```
 
-Without global `turbo`:
+The variables:
+
+| Variable | Meaning |
+| --- | --- |
+| `ARENA_NETWORK` | `mainnet` (4663, real funds, default) or `testnet` (46630) |
+| `RPC_URL` | Override the network RPC endpoint |
+| `MAX_TRADE_USD` | Per-trade dollar cap (default `25`) |
+| `MAX_SLIPPAGE_BPS` | Slippage tolerance on quote fills (default `300`) |
+| `ENABLE_OPENSERV_AGENT` | When `true`, wires the OpenServ agent into the desk |
+| `OPENSERV_AI_API_KEY` | OpenServ SDK key, needed only for the agent path |
+| `CDP_API_KEY_ID` / `CDP_API_KEY_SECRET` | Coinbase CDP API credentials |
+| `CDP_WALLET_SECRET` | The encrypted CDP wallet secret |
+| `AGENT_ACCOUNT_NAME` | Name to use for the agent account (default `arena67-agent`) |
+
+For the testnet desk, set `ARENA_NETWORK=testnet` and fund the agent wallet via
+the testnet faucet, then get the wallet address from
+`GET http://localhost:9000/trade/wallet`.
+
+## Develop
+
+Backend (watch mode):
 
 ```sh
-npx turbo build --filter=docs
-npm exec turbo build --filter=docs
-npm exec turbo build --filter=docs
+npm run start:dev --workspace=apps/arena-67-backend
 ```
 
-### Develop
-
-To develop all apps and packages, run the following command:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
+UI (watch mode):
 
 ```sh
-cd my-turborepo
-turbo dev
+npm run dev --workspace=apps/arena-67-ui
 ```
 
-Without global `turbo`, use your package manager:
+The UI talks to `http://localhost:9000` by default. To point it elsewhere, set
+`NEXT_PUBLIC_API_URL` in the UI environment.
+
+## Test
 
 ```sh
-cd my-turborepo
-npx turbo dev
-npm exec turbo dev
-npm exec turbo dev
+npm test --workspace=apps/arena-67-backend
 ```
 
-You can develop a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+The suite covers the pending-intent store (opaque ids, session ownership, TTL,
+claim idempotency, sweep) and the trading service (amount validation, the USD
+cap, funding selection, the quote-then-confirm flow, double-confirm being a
+no-op, wallet-offline behaviour).
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
+## Build
 
 ```sh
-turbo dev --filter=web
+npm run build --workspace=apps/arena-67-backend
+npm run build --workspace=apps/arena-67-ui
 ```
 
-Without global `turbo`:
+## Monorepo tools
 
 ```sh
-npx turbo dev --filter=web
-npm exec turbo dev --filter=web
-npm exec turbo dev --filter=web
+npx turbo build --filter=arena-67-backend
+npx turbo build --filter=arena-67-ui
 ```
-
-### Remote Caching
-
-> [!TIP]
-> Vercel Remote Cache is free for all plans. Get started today at [vercel.com](https://vercel.com/signup?utm_source=remote-cache-sdk&utm_campaign=free_remote_cache).
-
-Turborepo can use a technique known as [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching) to share cache artifacts across machines, enabling you to share build caches with your team and CI/CD pipelines.
-
-By default, Turborepo will cache locally. To enable Remote Caching you will need an account with Vercel. If you don't have an account you can [create one](https://vercel.com/signup?utm_source=turborepo-examples), then enter the following commands:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo login
-```
-
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo login
-npm exec turbo login
-npm exec turbo login
-```
-
-This will authenticate the Turborepo CLI with your [Vercel account](https://vercel.com/docs/concepts/personal-accounts/overview).
-
-Next, you can link your Turborepo to your Remote Cache by running the following command from the root of your Turborepo:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo link
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo link
-npm exec turbo link
-npm exec turbo link
-```
-
-## Useful Links
-
-Learn more about the power of Turborepo:
-
-- [Tasks](https://turborepo.dev/docs/crafting-your-repository/running-tasks)
-- [Caching](https://turborepo.dev/docs/crafting-your-repository/caching)
-- [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching)
-- [Filtering](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters)
-- [Configuration Options](https://turborepo.dev/docs/reference/configuration)
-- [CLI Usage](https://turborepo.dev/docs/reference/command-line-reference)
