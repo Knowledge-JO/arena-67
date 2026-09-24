@@ -25,7 +25,10 @@ async function bootstrap() {
   const LOCALHOST = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 
   app.enableCors({
-    origin(origin, cb) {
+    origin(
+      origin: string | undefined,
+      cb: (err: Error | null, allow?: boolean) => void,
+    ) {
       // No Origin header at all: curl, server-to-server, same-origin. Nothing
       // to enforce against, and blocking it only breaks health checks.
       if (!origin) return cb(null, true);

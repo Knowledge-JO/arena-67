@@ -9,7 +9,8 @@ Chat drives the trade; the side panel shows what's moving.
 
 ## Design intent
 
-One screen, two panes, no dashboard sprawl.
+One focused trading workspace with a market inspector, no dashboard sprawl.
+Desktop shows both panes together; mobile switches between Desk and Markets.
 
 - **No buy/sell buttons scattered around.** The chat *is* the interface. The
   only clickable affordances are the ones the agent puts in front of you:
@@ -69,7 +70,7 @@ Don't "simplify" this away.
 - [x] `lib/api.ts` — typed fetch wrapper mirroring `TradeStep`
 
 ### 2. Shell
-- [x] Two-pane layout: chat centre, research right. Single column under `lg`.
+- [x] Responsive workspace: chat centre and research right on desktop; switchable Desk and Markets panels on mobile.
 - [x] Header: wordmark, agent wallet address (truncated, click-to-copy), chain badge
 - [x] Empty state — the one place we *tell* people what to type
 
@@ -99,7 +100,7 @@ Don't "simplify" this away.
 ### 6. Polish
 - [x] Loading skeletons (no layout shift)
 - [x] Error + offline states for a backend that isn't running
-- [x] Mobile: 16px gutters, no horizontal scroll
+- [x] Mobile: responsive Desk and Markets tabs, 16px gutters, no horizontal scroll
 - [x] Keyboard: focus rings, `/` focuses composer, Esc cancels
 - [x] `prefers-reduced-motion` honoured throughout
 
@@ -112,8 +113,9 @@ Don't "simplify" this away.
 
 ## Known gaps (backend, not UI)
 
-- Agent wallet bridge is **unverified** — Coinbase API was unreachable from the
-  dev sandbox. `npx nest start` locally should log `Agent wallet 0x…`.
+- Agent wallet bridge is **unverified** - outbound access to the Coinbase API
+  was blocked from the dev environment. Restore access to `api.cdp.coinbase.com`,
+  restart the backend, and verify it logs `Agent wallet 0x…`.
 - Trending ranks by *pool count*, not volume. Label it honestly in the UI —
   "pools", not "24h volume". Don't display a number the backend isn't measuring.
 - `priceImpactBps` is always `0` (needs StateView spot). **Don't render a price
@@ -122,20 +124,24 @@ Don't "simplify" this away.
 
 ---
 
-## Verified (2026-09-23)
+## Verified (2026-09-24)
 
-- `npx tsc --noEmit` — clean
-- `npx next build` — compiled in 56s, static `/` generated, rc=0
-- Served on :3100 → HTTP 200. Header, empty state, example chips, trending pane
-  and the "nothing is signed" note all present in the served HTML.
+- `npx tsc --noEmit` - clean after the responsive workspace update.
+- `npm run lint -- app/dashboard/page.tsx` - clean.
+- `npm run build` - passed; `/` and `/dashboard` prerendered as static routes.
+- `/dashboard` returned HTTP 200 from the dev server after the update.
+- `git diff --check` - clean.
+- Read-only mainnet API flow passed through token selection and live quote
+  creation for NVDA; confirm returned the expected wallet-offline rejection.
+- No transaction hash was returned and no transaction was submitted.
 - Tailwind 4 `@theme inline` tokens **do** compile: `bg-surface-raised`,
   `text-fg-muted`, `border-border-base`, `bg-bg`, `h-dvh` all emitted.
   Opacity modifiers (`bg-accent/15`) compile to `color-mix(in oklab, …)`
   preceded by a solid-colour fallback, so older browsers degrade not break.
 - Custom `prefers-reduced-motion` and `.lenis` rules survive the build.
 
-**Still unexercised: every interactive path.** Cards, Lenis scrolling and the
-polling are verified only as "compiles and renders". No trade has been driven
-through the UI, because the backend cannot start past `WalletService` without
-the Coinbase API, which is blocked from the dev sandbox. First local run should
-target: pick a token → set amount → see a quote → confirm.
+**Still unexercised: the browser-driven flow and on-chain execution.** The API
+flow has been exercised through token selection, live quote creation, and the
+confirmation guard, but not through browser interaction. The Coinbase API
+connectivity issue still blocks wallet verification and real trade execution.
+Once restored, verify the complete flow in the UI and confirm a testnet trade.
