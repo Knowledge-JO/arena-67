@@ -131,14 +131,17 @@ Don't "simplify" this away.
 - `npm run build` - passed; `/` and `/dashboard` prerendered as static routes.
 - `/dashboard` returned HTTP 200 from the dev server after the update.
 - `git diff --check` - clean.
+- Read-only mainnet API flow passed through token selection and live quote
+  creation for NVDA; confirm returned the expected wallet-offline rejection.
+- No transaction hash was returned and no transaction was submitted.
 - Tailwind 4 `@theme inline` tokens **do** compile: `bg-surface-raised`,
   `text-fg-muted`, `border-border-base`, `bg-bg`, `h-dvh` all emitted.
   Opacity modifiers (`bg-accent/15`) compile to `color-mix(in oklab, …)`
   preceded by a solid-colour fallback, so older browsers degrade not break.
 - Custom `prefers-reduced-motion` and `.lenis` rules survive the build.
 
-**Still unexercised: the end-to-end trade flow.** The build and route checks do
-not verify token selection, amount entry, quote review, or transaction
-confirmation in a live browser. The Coinbase API connectivity issue still blocks
-wallet verification and real trade execution. Once restored, verify: pick a
-token → set amount → review a quote → confirm.
+**Still unexercised: the browser-driven flow and on-chain execution.** The API
+flow has been exercised through token selection, live quote creation, and the
+confirmation guard, but not through browser interaction. The Coinbase API
+connectivity issue still blocks wallet verification and real trade execution.
+Once restored, verify the complete flow in the UI and confirm a testnet trade.
