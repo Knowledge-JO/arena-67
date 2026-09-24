@@ -11,7 +11,7 @@
   "devDependencies": {
     "prettier": "3.9.6",
     "turbo": "^2.11.2",
-    "typescript": "7.0.2"
+    "typescript": "^5.9.3"
   },
   "engines": {
     "node": ">=24"
@@ -19,7 +19,7 @@
   "devEngines": {
     "packageManager": {
       "name": "npm",
-      "version": "11.13.0"
+      "version": "11.19.0"
     }
   },
   "workspaces": [
@@ -28,5 +28,18 @@
   ],
   "overrides": {
     "viem": "2.38.3"
+  },
+  "allowScripts": {
+    "keccak@3.0.4": true,
+    "secp256k1@5.0.2": true,
+    "bufferutil@4.1.0": true,
+    "utf-8-validate@5.0.10": true,
+    "utf-8-validate@6.0.6": true,
+    "bigint-buffer@1.1.5": true,
+    "@parcel/watcher@2.6.0": true,
+    "unrs-resolver@1.12.2": true,
+    "@opensea/seaport-js": false,
+    "opensea-js": false,
+    "@coinbase/x402": false
   }
 }
