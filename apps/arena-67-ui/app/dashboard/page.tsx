@@ -1,8 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { AnimatePresence, motion } from 'motion/react';
-import { Copy, Check } from 'lucide-react';
+import { ArrowUpRight, Check, Copy } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { getSessionId } from '@/lib/session';
 import { parseIntent, EXAMPLES } from '@/lib/parse-intent';
@@ -105,11 +106,21 @@ export default function Arena() {
   };
 
   return (
-    <div className="grid h-dvh grid-cols-1 lg:grid-cols-[1fr_20rem]">
+    <div className="grid h-dvh grid-cols-1 bg-bg font-display text-fg lg:grid-cols-[1fr_20rem]">
       <div className="flex min-h-0 flex-col">
-        <header className="flex items-center gap-3 border-b border-border-base px-4 py-3 sm:px-6">
-          <span className="text-sm font-semibold tracking-tight">Arena 67</span>
-          <span className="rounded-full border border-border-base px-2 py-0.5 text-[10px] text-fg-muted">
+        <header className="flex min-h-14 items-center gap-3 border-b border-border-base px-4 py-3 sm:px-6">
+          <Link
+            href="/"
+            aria-label="Arena 67 home"
+            className="flex items-center gap-2 text-xs font-bold tracking-[0.16em] text-fg transition-colors hover:text-fg-muted"
+          >
+            ARENA
+            <span className="grid h-5 w-7 place-items-center border border-border-strong font-ticker text-[10px] font-medium tracking-normal">
+              67
+            </span>
+          </Link>
+          <span className="h-4 w-px bg-border-strong" aria-hidden="true" />
+          <span className="font-ticker text-[10px] uppercase tracking-[0.12em] text-fg-subtle">
             Robinhood Chain
           </span>
 
@@ -123,7 +134,7 @@ export default function Arena() {
                   setTimeout(() => setCopied(false), 1200);
                 } catch { /* clipboard blocked */ }
               }}
-              className="ml-auto inline-flex items-center gap-1.5 rounded-lg px-2 py-1 font-mono text-[11px] text-fg-muted transition-colors hover:bg-surface-raised hover:text-fg"
+              className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-border-base px-2.5 py-1.5 font-mono text-[10px] text-fg-muted transition-colors hover:border-border-strong hover:bg-surface-raised hover:text-fg"
               title="Agent wallet — copy address"
             >
               {shortAddress(wallet)}
@@ -138,22 +149,25 @@ export default function Arena() {
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="pt-[12vh]"
+                className="pt-[10vh]"
               >
-                <h1 className="text-lg font-medium tracking-tight">
+                <p className="font-ticker text-[10px] uppercase tracking-[0.22em] text-fg-subtle">
+                  Arena 67 / Trading desk
+                </p>
+                <h1 className="mt-4 max-w-2xl text-3xl font-semibold leading-[1.08] tracking-[-0.045em] sm:text-4xl">
                   What do you want to trade?
                 </h1>
-                <p className="mt-1.5 max-w-md text-sm leading-relaxed text-fg-muted">
+                <p className="mt-3 max-w-md text-sm leading-relaxed text-fg-muted">
                   Say it plainly. I&apos;ll find the token, price the swap, and
                   show you the fill before anything is signed.
                 </p>
-                <div className="mt-4 flex flex-wrap gap-1.5">
+                <div className="mt-6 flex flex-wrap gap-2">
                   {EXAMPLES.map((ex) => (
                     <button
                       key={ex}
                       type="button"
                       onClick={() => setDraft(ex)}
-                      className="rounded-full border border-border-base px-3 py-1.5 text-xs text-fg-muted transition-colors hover:border-border-strong hover:text-fg"
+                      className="rounded-lg border border-border-base bg-surface px-3 py-2 text-xs text-fg-muted transition-colors hover:border-border-strong hover:bg-surface-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
                     >
                       {ex}
                     </button>
@@ -239,8 +253,11 @@ export default function Arena() {
               busy={busy}
               placeholder='e.g. "buy 25 USDG of ANIME"  ·  press / to focus'
             />
-            <p className={cn('mt-1.5 text-[10px] text-fg-subtle')}>
-              Nothing is signed until you confirm a quote.
+            <p className={cn('mt-2 flex items-center justify-between gap-3 font-ticker text-[9px] uppercase tracking-[0.1em] text-fg-subtle')}>
+              <span>Nothing is signed until you confirm a quote.</span>
+              <Link href="/" className="inline-flex shrink-0 items-center gap-1 transition-colors hover:text-fg">
+                Home <ArrowUpRight size={11} aria-hidden="true" />
+              </Link>
             </p>
           </div>
         </div>

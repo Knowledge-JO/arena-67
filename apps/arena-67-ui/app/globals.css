@@ -1,39 +1,20 @@
 @import "tailwindcss";
 
-/*
- * Dark-first. This is a surface people stare at for a long time, and the
- * light theme is the exception rather than the default.
- */
+/* The trading desk uses a neutral, monochrome terminal palette. */
 :root {
-  --bg: #08090b;
-  --surface: #0e1013;
-  --surface-raised: #15181d;
-  --border: #23272e;
-  --border-strong: #333942;
-  --fg: #e8eaed;
-  --fg-muted: #9aa1ac;
-  --fg-subtle: #6b7280;
-  --accent: #5b8cff;
-  --accent-fg: #ffffff;
+  --bg: #101011;
+  --surface: #171718;
+  --surface-raised: #202022;
+  --border: #2a2a2d;
+  --border-strong: #414145;
+  --fg: #f0f0ef;
+  --fg-muted: #a6a6a9;
+  --fg-subtle: #77777c;
+  --accent: #f0f0ef;
+  --accent-fg: #101011;
   --positive: #3ecf8e;
   --negative: #ff6b6b;
-  --warning: #f0b429;
-}
-
-:root[data-theme="light"] {
-  --bg: #fbfbfc;
-  --surface: #ffffff;
-  --surface-raised: #f4f5f7;
-  --border: #e4e6ea;
-  --border-strong: #cfd3da;
-  --fg: #14161a;
-  --fg-muted: #5c636e;
-  --fg-subtle: #878e99;
-  --accent: #2f6bff;
-  --accent-fg: #ffffff;
-  --positive: #0f9d63;
-  --negative: #d93a3a;
-  --warning: #b8860b;
+  --warning: #c5c5c8;
 }
 
 @theme inline {
@@ -50,16 +31,16 @@
   --color-positive: var(--positive);
   --color-negative: var(--negative);
   --color-warning: var(--warning);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-space-grotesk);
+  --font-mono: var(--font-jetbrains-mono);
   --font-display: var(--font-space-grotesk);
   --font-ticker: var(--font-jetbrains-mono);
 }
 
 /*
- * The landing page is a paper prospectus; the desk behind /dashboard stays a
- * dark terminal. These tokens are literal, not theme-swapped: the marketing
- * surface is black ink on white paper, always.
+ * The landing page is a paper prospectus; the desk behind /dashboard is its
+ * monochrome dark counterpart. Semantic status colors remain reserved for
+ * trade outcomes and warnings.
  */
 @theme {
   --color-paper: #fafaf9;
