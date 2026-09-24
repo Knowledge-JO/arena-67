@@ -52,6 +52,29 @@
   --color-warning: var(--warning);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-space-grotesk);
+  --font-ticker: var(--font-jetbrains-mono);
+}
+
+/*
+ * The landing page is a paper prospectus; the desk behind /dashboard stays a
+ * dark terminal. These tokens are literal, not theme-swapped: the marketing
+ * surface is black ink on white paper, always.
+ */
+@theme {
+  --color-paper: #fafaf9;
+  --color-paper-sunk: #f1f1ef;
+  --color-ink: #131416;
+  --color-ink-muted: #565a61;
+  --color-ink-subtle: #8b9098;
+  --color-line: #e3e4e6;
+  --color-line-strong: #c8cbd1;
+  --animate-tape: tape-scroll 42s linear infinite;
+}
+
+@keyframes tape-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
 }
 
 html, body { height: 100%; }
