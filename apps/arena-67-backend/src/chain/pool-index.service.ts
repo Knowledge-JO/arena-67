@@ -67,6 +67,9 @@ export class PoolIndexService implements OnModuleInit {
   private readonly resolved = new Map<string, PoolRecord | null>();
   private lastBlock = 0n;
   private ready = false;
+  private markReady!: () => void;
+  /** Settles when the first backfill finishes. Until then the index holds only the oldest pools. */
+  private readonly readyPromise = new Promise<void>((resolve) => (this.markReady = resolve));
 
   constructor(
     private readonly chain: ChainService,
@@ -98,6 +101,7 @@ export class PoolIndexService implements OnModuleInit {
     void this.scan(head - span, head)
       .then(async () => {
         this.ready = true;
+        this.markReady();
         this.log.log(
           `pool index ready — ${this.pools.size} pools, ${this.byToken.size} tokens`,
         );
@@ -321,6 +325,16 @@ export class PoolIndexService implements OnModuleInit {
       .sort((a, b) => b.score - a.score || b.m.poolCount - a.m.poolCount)
       .slice(0, limit)
       .map((s) => s.m);
+  }
+
+  /** Waits for the first backfill, up to `timeoutMs`. True if the index is ready. */
+  async whenReady(timeoutMs: number): Promise<boolean> {
+    if (this.ready) return true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => (timer = setTimeout(resolve, timeoutMs)));
+    await Promise.race([this.readyPromise, timeout]);
+    clearTimeout(timer);
+    return this.ready;
   }
 
   /**

@@ -3,6 +3,7 @@ const CARD_LABELS: Record<string, string> = {
   portfolio: 'portfolio',
   token_report: 'token report',
   top_tokens: 'top tokens',
+  new_tokens: 'new tokens',
   holder_overlap: 'common holders',
   wallet_holdings: 'wallet holdings',
   token_choices: 'token search results',

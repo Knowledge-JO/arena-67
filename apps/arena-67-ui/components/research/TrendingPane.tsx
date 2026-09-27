@@ -6,7 +6,7 @@ import Lenis from 'lenis';
 import { Loader2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import { usdCompact } from '@/lib/format';
+import { ageShort, usdCompact } from '@/lib/format';
 import type { SidebarList, SidebarToken, SidebarView } from '@/lib/types';
 import { TokenAvatar } from './shared';
 
@@ -269,20 +269,4 @@ function Row({
       </div>
     </motion.button>
   );
-}
-
-/**
- * How long ago a token launched, short enough for a sidebar: "45m old",
- * "3h old", "2d old", "4mo old". Launch is when its first trading pool opened
- * — the chain keeps no history to read the contract's own deploy time from.
- */
-function ageShort(at: number | null | undefined, now = Date.now()): string {
-  if (!at) return '—';
-  const m = Math.max(0, (now - at) / 60_000);
-  if (m < 60) return `${Math.max(1, Math.round(m))}m old`;
-  const h = m / 60;
-  if (h < 48) return `${Math.round(h)}h old`;
-  const d = h / 24;
-  if (d < 60) return `${Math.round(d)}d old`;
-  return `${Math.round(d / 30)}mo old`;
 }

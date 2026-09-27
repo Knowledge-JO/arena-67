@@ -1,5 +1,11 @@
 import { BadRequestException, Controller, Get, Query } from '@nestjs/common';
-import { ResearchService, SIDEBAR_MAX, type SidebarView } from './research.service';
+import {
+  NEW_MAX_AGE_HOURS,
+  NEW_MIN_LIQUIDITY_USD,
+  ResearchService,
+  SIDEBAR_MAX,
+  type SidebarView,
+} from './research.service';
 
 const VIEWS: SidebarView[] = ['h1', 'h6', 'h24', 'new'];
 
@@ -11,6 +17,24 @@ export class ResearchController {
   @Get('trending')
   trending() {
     return this.research.snapshot();
+  }
+
+  /**
+   * Just-launched tokens with liquidity, as a chat card — the agent's
+   * list_new_tokens tool. Same list as the sidebar's New tab.
+   */
+  @Get('new-tokens')
+  async newTokens(@Query('limit') limit = '10') {
+    const n = Math.min(Math.max(Number.parseInt(limit, 10) || 10, 1), SIDEBAR_MAX);
+    const list = await this.research.newTokens(n);
+    return {
+      kind: 'new_tokens' as const,
+      tokens: list.tokens,
+      total: list.total,
+      maxAgeHours: NEW_MAX_AGE_HOURS,
+      minLiquidityUsd: NEW_MIN_LIQUIDITY_USD,
+      asOf: list.asOf,
+    };
   }
 
   /**

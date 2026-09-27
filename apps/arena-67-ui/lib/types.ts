@@ -182,6 +182,16 @@ export interface TopTokens {
   asOf: string;
 }
 
+/** Just-launched tokens with liquidity, as a chat card. */
+export interface NewTokens {
+  kind: 'new_tokens';
+  tokens: SidebarToken[];
+  total: number;
+  maxAgeHours: number;
+  minLiquidityUsd: number;
+  asOf: string;
+}
+
 export interface OverlapToken {
   address: string;
   symbol: string;
@@ -231,6 +241,7 @@ export type TradeStep =
   | Portfolio
   | TokenReport
   | TopTokens
+  | NewTokens
   | HolderOverlap
   | WalletHoldings
   | { kind: 'need_token'; intentId: string; ticker?: string; message: string }

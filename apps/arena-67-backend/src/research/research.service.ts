@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PoolIndexService } from '../chain/pool-index.service';
 import { MarketService } from '../market/market.service';
@@ -56,9 +56,10 @@ export interface SidebarList {
 /** Tokens with a recent pool, checked against the market for age and liquidity. Five requests. */
 const NEW_CANDIDATES = 150;
 /** Older than this, a token with a fresh pool is not new. */
-const NEW_MAX_AGE_MS = 48 * 3_600_000;
+export const NEW_MAX_AGE_HOURS = 48;
+const NEW_MAX_AGE_MS = NEW_MAX_AGE_HOURS * 3_600_000;
 /** "Liquidity already added": at least this much in its pools. */
-const NEW_MIN_LIQUIDITY_USD = 1_000;
+export const NEW_MIN_LIQUIDITY_USD = 1_000;
 const NEW_TTL_MS = 60_000;
 export const SIDEBAR_MAX = RANKING_MAX;
 
@@ -194,6 +195,11 @@ export class ResearchService implements OnModuleInit {
   }
 
   private async computeNew(): Promise<SidebarList> {
+    // The backfill reads oldest blocks first. Before it finishes, the "most
+    // recent" pools are hours old and the newest launches are missing.
+    if (!(await this.index.whenReady(60_000))) {
+      throw new ServiceUnavailableException('Still reading recent launches from the chain. Try again in a moment.');
+    }
     const candidates = this.index.recentTokens(NEW_CANDIDATES);
     const now = Date.now();
     const found = (await this.market.volumes(candidates))

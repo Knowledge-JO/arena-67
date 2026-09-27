@@ -137,6 +137,9 @@ export function registerResearchTools(server: McpServer, api: AxiosInstance) {
 /** Caveats the model should pass on, if any. */
 export function trendingNote(snap: TrendingSnapshot): string | undefined {
   if (snap.stale) return 'This list is stale; the backend has not refreshed it recently.';
+  if (snap.tokens.length === 0) {
+    return 'The backend has just started and is still reading recent trading. Ask again in a minute or two.';
+  }
   if (snap.observedMinutes < 1440) {
     return (
       `The backend has only watched ${snap.observedMinutes} minutes of trading so far, ` +

@@ -112,6 +112,14 @@ async function getTopVolume(
   return data;
 }
 
+async function getNewTokens(
+  api: AxiosInstance,
+  params: { limit?: number },
+): Promise<Record<string, unknown>> {
+  const { data } = await api.get('/research/new-tokens', { params });
+  return data;
+}
+
 async function findCommonHolders(
   api: AxiosInstance,
   body: { tokens: string[]; topN?: number; minTokens?: number; include?: string[] },
@@ -145,6 +153,7 @@ export {
   getTokenReport,
   getTopHolders,
   getTopVolume,
+  getNewTokens,
   getWalletHoldings,
   getPortfolio,
   getTradeHistory,
