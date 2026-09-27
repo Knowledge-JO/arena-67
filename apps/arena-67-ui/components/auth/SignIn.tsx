@@ -56,7 +56,8 @@ export function SignIn({ onSignedIn }: { onSignedIn: (me: Me, isNewUser: boolean
     setError(null);
     try {
       const res = await api.verifyCode(email.trim(), value);
-      onSignedIn({ user: res.user, wallet: res.wallet }, res.isNewUser);
+      // A backend from before the sandbox sends no mode; sandbox is the safe reading.
+      onSignedIn({ user: res.user, wallet: res.wallet, mode: res.mode ?? 'sandbox' }, res.isNewUser);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'That code did not work.');
       setCode('');

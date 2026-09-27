@@ -6,6 +6,39 @@ import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import * as schema from './schema';
 import { DRIZZLE } from './database.constants';
 import { migrate } from './migrate';
+import { isConnectionError } from './connection-errors';
+
+/**
+ * Retries getting a connection, twice, with backoff. Always safe: a failure
+ * here happens before any query is sent, so nothing can run twice. Covers
+ * pool.query and transactions alike, since both acquire through connect().
+ */
+export function retryConnect(pool: import('pg').Pool, log: Logger): void {
+  const connect = pool.connect.bind(pool) as () => Promise<import('pg').PoolClient>;
+  const attempt = async (): Promise<import('pg').PoolClient> => {
+    for (let i = 0; ; i++) {
+      try {
+        return await connect();
+      } catch (err) {
+        if (i >= 2 || !isConnectionError(err)) throw err;
+        log.warn(`database connect failed (${(err as Error).message}); retrying`);
+        await new Promise((r) => setTimeout(r, 500 * 3 ** i));
+      }
+    }
+  };
+  // pg-pool calls connect with a callback internally (from query()); callers
+  // outside it use the promise form. Both are kept.
+  (pool as unknown as { connect: unknown }).connect = (
+    cb?: (err: Error | undefined, client?: import('pg').PoolClient, release?: () => void) => void,
+  ) => {
+    if (typeof cb !== 'function') return attempt();
+    attempt().then(
+      (client) => cb(undefined, client, () => client.release()),
+      (err: Error) => cb(err),
+    );
+    return undefined;
+  };
+}
 
 /** Startup attempts before giving up: 2+4+8+16+32s of patience. */
 const STARTUP_ATTEMPTS = 6;
@@ -41,12 +74,22 @@ async function connect(config: ConfigService, log: Logger): Promise<Handle> {
   if (url) {
     const { Pool } = await import('pg');
     const { drizzle } = await import('drizzle-orm/node-postgres');
-    const pool = new Pool({ connectionString: url });
+    const pool = new Pool({
+      connectionString: url,
+      // Bounds on everything: this network drops connections, and a query on
+      // a half-open socket otherwise waits forever — holding its client,
+      // which in turn made pool.end() and so the whole shutdown hang.
+      connectionTimeoutMillis: 15_000,
+      query_timeout: 60_000,
+      idleTimeoutMillis: 30_000,
+      keepAlive: true,
+    });
     // A connection dropped by the network emits 'error' on the pool (idle
     // clients) or on the client itself (checked out). With no listener, Node
     // treats that as fatal and the whole server exits over one blip. Logged
     // instead: the pool discards the broken client, and the query that was
     // using it fails on its own and is retried by whoever issued it.
+    retryConnect(pool, log);
     pool.on('error', (err) => log.warn(`database connection dropped (idle): ${err.message}`));
     pool.on('connect', (client) => {
       client.on('error', (err) => log.warn(`database connection dropped: ${err.message}`));
@@ -113,7 +156,12 @@ export class DatabaseModule implements OnModuleDestroy {
   constructor(@Inject(DRIZZLE) private readonly handle: Handle) {}
 
   async onModuleDestroy() {
-    await this.handle.close();
+    // Capped: a close that waits on a stuck connection kept a stopped server
+    // alive, holding its port, with a pool that refused every query.
+    await Promise.race([
+      this.handle.close().catch(() => undefined),
+      new Promise((r) => setTimeout(r, 5_000)),
+    ]);
   }
 }
 

@@ -19,7 +19,12 @@ import {
   asOf,
   pctOfSupply,
   useHolderProgress,
+  useLiveMarket,
+  LiveBadge,
+  usePriceFlash,
+  clock,
 } from './shared';
+import { CardNote } from '../chat/CardNote';
 
 /**
  * The answer to "what do you know about X".
@@ -33,27 +38,47 @@ import {
  * Holders may still be counting when the report is made. The card then polls
  * and fills its own holders section in when they are ready, so the user never
  * has to ask twice.
+ *
+ * The two most recent report cards in a conversation are `live`: price, market
+ * cap and 24h change are read from the token's deepest pool every few seconds,
+ * and the rest of the market figures refresh as the upstream does. Older cards
+ * are snapshots and say so — a scrolled-back card quietly changing would make
+ * the conversation around it wrong.
  */
 export function TokenReportCard({
   report,
   onBuy,
   onAsk,
   disabled,
+  live = false,
+  note,
 }: {
+  /** The agent's comment, shown inside the card. */
+  note?: string;
   report: TokenReport;
+  /** Keep this card's market figures updating. */
+  live?: boolean;
   onBuy: (address: string, symbol: string) => void;
   onAsk: (text: string) => void;
   disabled?: boolean;
 }) {
-  const { token, market, signals } = report;
+  const { token, signals } = report;
+  const liveData = useLiveMarket(token.address, live);
+  // Live figures when we have them; the report's own otherwise, so the card
+  // renders immediately and never goes blank if a poll fails.
+  const market = liveData?.market ?? report.market;
+  const priceUsd = liveData ? liveData.priceUsd : market?.priceUsd;
+  const change24h = liveData ? liveData.priceChange24h : market?.priceChange.h24;
+  const marketCap = liveData ? liveData.marketCap : market?.marketCap;
+  const flash = usePriceFlash(priceUsd);
   const [holders, setHolders] = useState<HoldersBlock>(report.holders);
   const counting = holders.status !== 'ready' && holders.status !== 'unavailable' && holders.status !== 'failed';
   const progress = useHolderProgress([token.address], counting);
-  const live = progress[token.address.toLowerCase()];
+  const holderLive = progress[token.address.toLowerCase()];
 
   // When the count finishes, fetch the holders and show them in place.
   useEffect(() => {
-    if (!counting || live?.status !== 'ready') return;
+    if (!counting || holderLive?.status !== 'ready') return;
     let cancelled = false;
     api
       .tokenHolders(token.address, 10)
@@ -62,7 +87,7 @@ export function TokenReportCard({
     return () => {
       cancelled = true;
     };
-  }, [counting, live?.status, token.address]);
+  }, [counting, holderLive?.status, token.address]);
 
   const name = token.name || token.symbol || 'Unknown token';
   const symbol = token.symbol || '?';
@@ -78,21 +103,32 @@ export function TokenReportCard({
       <header className="flex items-start gap-3 px-4 pb-3 pt-4">
         <TokenAvatar symbol={symbol} imageUrl={token.imageUrl} size="lg" />
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-baseline gap-x-2">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <h2 className="truncate text-base font-semibold tracking-tight">{name}</h2>
             <span className="text-xs text-fg-muted">{symbol}</span>
+            <LiveBadge live={live} asOfIso={report.asOf} />
           </div>
           <AddressChip address={token.address} explorer={report.explorer} kind="token" className="mt-0.5" />
         </div>
         <div className="shrink-0 text-right">
-          <p className="text-base font-semibold tabular-nums">{usd(market?.priceUsd)}</p>
-          {market?.priceChange.h24 != null && (
-            <p className={cn('text-xs tabular-nums', changeTone(market.priceChange.h24))}>
-              {percent(market.priceChange.h24)} <span className="text-fg-subtle">24h</span>
+          <motion.p
+            key={flash.key}
+            initial={flash.dir ? { color: flash.dir === 'up' ? 'var(--positive)' : 'var(--negative)' } : false}
+            animate={{ color: 'var(--fg)' }}
+            transition={{ duration: 1.2, ease: 'easeOut' }}
+            className="text-base font-semibold tabular-nums"
+            aria-live={live ? 'polite' : undefined}
+          >
+            {usd(priceUsd)}
+          </motion.p>
+          {change24h != null && (
+            <p className={cn('text-xs tabular-nums', changeTone(change24h))}>
+              {percent(change24h)} <span className="text-fg-subtle">24h</span>
             </p>
           )}
         </div>
       </header>
+      <CardNote text={note} />
 
       <div className="flex flex-col gap-4 px-4 pb-4">
         {signals.length > 0 && <Signals signals={signals} />}
@@ -103,7 +139,7 @@ export function TokenReportCard({
             <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
               <Stat
                 label="Market cap"
-                value={usdCompact(market.marketCap)}
+                value={usdCompact(marketCap)}
                 hint="Price × tokens in circulation: roughly what the whole token is worth."
               />
               <Stat
@@ -118,7 +154,9 @@ export function TokenReportCard({
               {(['h1', 'h6', 'h24'] as const).map((w) => (
                 <span key={w} className="tabular-nums text-fg-subtle">
                   {w.replace('h', '')}h{' '}
-                  <span className={changeTone(market.priceChange[w])}>{percent(market.priceChange[w])}</span>
+                  <span className={changeTone(w === 'h24' ? change24h : market.priceChange[w])}>
+                    {percent(w === 'h24' ? change24h : market.priceChange[w])}
+                  </span>
                 </span>
               ))}
             </div>
@@ -142,7 +180,7 @@ export function TokenReportCard({
           </SectionTitle>
           <HoldersSection
             holders={holders}
-            live={live}
+            live={holderLive}
             explorer={report.explorer}
             onAsk={onAsk}
             disabled={disabled}
@@ -179,7 +217,12 @@ export function TokenReportCard({
           </button>
         </footer>
         <p className="-mt-2 text-[10px] text-fg-subtle">
-          Report as of {asOf(report.asOf)}. Buying shows you a quote first — nothing happens until you confirm.
+          {live && liveData
+            ? liveData.source === 'chain' && liveData.pool
+              ? `Live price from the ${liveData.pool.quoteSymbol} pool, updated ${clock(liveData.at)}. `
+              : `Live, refreshed every 30 seconds — updated ${clock(liveData.at)}. `
+            : `Report as of ${asOf(report.asOf)}. `}
+          Buying shows you a quote first — nothing happens until you confirm.
         </p>
       </div>
     </motion.article>

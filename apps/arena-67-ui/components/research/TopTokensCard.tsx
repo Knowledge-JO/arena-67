@@ -6,6 +6,7 @@ import { cn, shortAddress } from '@/lib/utils';
 import { usdCompact, percent, changeTone } from '@/lib/format';
 import type { TopTokens } from '@/lib/types';
 import { TokenAvatar, asOf } from './shared';
+import { CardNote } from '../chat/CardNote';
 
 const WINDOW_LABEL = { h1: 'last hour', h6: 'last 6 hours', h24: 'last 24 hours' } as const;
 
@@ -21,7 +22,10 @@ export function TopTokensCard({
   onPickToken,
   onAsk,
   disabled,
+  note,
 }: {
+  /** The agent's comment, shown inside the card. */
+  note?: string;
   data: TopTokens;
   onPickToken: (address: string, symbol: string) => void;
   onAsk: (text: string) => void;
@@ -48,6 +52,7 @@ export function TopTokensCard({
         </div>
         <span className="text-[10px] text-fg-subtle">as of {asOf(data.asOf)}</span>
       </header>
+      <CardNote text={note} />
 
       {data.tokens.length === 0 ? (
         <p className="border-t border-border-base px-4 py-4 text-sm text-fg-muted">

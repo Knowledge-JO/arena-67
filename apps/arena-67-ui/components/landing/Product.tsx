@@ -105,6 +105,7 @@ export function Product() {
                 onSelectToken={() => {}}
                 onSelectPool={() => router.push('/dashboard')}
                 onSubmitAmount={() => router.push('/dashboard')}
+                onSubmitPercent={() => router.push('/dashboard')}
                 onConfirm={() => {}}
                 onRequote={() => {}}
                 onPickToken={() => router.push('/dashboard')}

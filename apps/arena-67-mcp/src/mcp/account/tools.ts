@@ -2,6 +2,8 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { type AxiosInstance } from 'axios';
 import { z } from 'zod';
 import {
+  addPaperFunds,
+  getMode,
   getPortfolio,
   getTradeHistory,
   recallMemory,
@@ -23,10 +25,12 @@ export function registerAccountTools(server: McpServer, api: AxiosInstance) {
     {
       title: "Get the user's portfolio",
       description:
-        "The signed-in user's wallet: every token it holds with balance, price " +
-        'and USD value, plus the total. Use when they ask what they hold, their ' +
-        'balance, or their portfolio. Tokens with no market are listed but ' +
-        'excluded from the total — say how many, never value them at zero.',
+        "The signed-in user's portfolio for the mode they are in. In sandbox " +
+        '(mode: "sandbox") it is their paper account, with net deposits, total ' +
+        'return and profit per holding; in live it is their real wallet. Use when ' +
+        'they ask what they hold, their balance, profit, or portfolio. Tokens with ' +
+        'no market are listed but excluded from the total — say how many, never ' +
+        'value them at zero.',
       inputSchema: {},
     },
     async () => {
@@ -43,7 +47,8 @@ export function registerAccountTools(server: McpServer, api: AxiosInstance) {
     {
       title: "Get the user's trade history",
       description:
-        'Trades the user has made through Arena, newest first. The authority for ' +
+        'Trades the user has made through Arena in their current mode, newest ' +
+        'first — paper trades in sandbox, real ones in live. The authority for ' +
         '"what did I buy/sell" — prefer this over recalled conversation, which ' +
         'is approximate where this is exact.',
       inputSchema: {},
@@ -51,6 +56,41 @@ export function registerAccountTools(server: McpServer, api: AxiosInstance) {
     async () => {
       try {
         return toolSuccess({ trades: await getTradeHistory(api) });
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'add_paper_funds',
+    {
+      title: 'Add paper funds to the sandbox',
+      description:
+        'Adds paper ETH or USDG to the user\'s sandbox account (sandbox mode ' +
+        'only; it costs nothing and is not real money). Up to $1,000,000 per ' +
+        'top-up. Deposits are not counted as profit. Use when the user asks to ' +
+        'add or top up paper funds, or has none and wants to trade in sandbox. ' +
+        'There is no tool to switch between sandbox and live — the user does ' +
+        'that with the switch in the app.',
+      inputSchema: {
+        asset: z.enum(['ETH', 'USDG']),
+        amount: z.string().regex(/^\d+(\.\d+)?$/, 'A plain number, e.g. "1000" or "0.5"'),
+      },
+    },
+    async ({ asset, amount }) => {
+      try {
+        const { mode } = await getMode(api);
+        if (mode !== 'sandbox') {
+          return toolError(
+            new Error(
+              'The user is in Live mode. Paper funds only exist in Sandbox — they can switch at the top of the app.',
+            ),
+          );
+        }
+        const result = await addPaperFunds(api, { asset, amount });
+        // Returned as the portfolio card, so the new balance is on screen.
+        return toolSuccess((result as { portfolio: unknown }).portfolio ?? result);
       } catch (error) {
         return toolError(error);
       }

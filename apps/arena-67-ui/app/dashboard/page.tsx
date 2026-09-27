@@ -1,20 +1,26 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { AnimatePresence, motion } from 'motion/react';
 import { ArrowUpRight, LogOut } from 'lucide-react';
 import { api, ApiError, SignedOutError } from '@/lib/api';
 import { EXAMPLES } from '@/lib/parse-intent';
 import { cn } from '@/lib/utils';
-import type { ConversationSummary, Entry, Me, StoredMessage, TradeStep } from '@/lib/types';
-import { StepCard } from '@/components/chat/StepCard';
+import type { AgentReply, ConversationSummary, Entry, Me, StoredMessage, TradeStep, TradingMode } from '@/lib/types';
+import { CARD_OWNS_NOTE, StepCard } from '@/components/chat/StepCard';
 import { AgentMessage } from '@/components/chat/AgentMessage';
 import { Composer, type ComposerHandle } from '@/components/chat/Composer';
 import { TrendingPane } from '@/components/research/TrendingPane';
 import { SignIn } from '@/components/auth/SignIn';
 import { WalletBox } from '@/components/account/WalletBox';
 import { ConversationList } from '@/components/account/ConversationList';
+import { ModeSwitch } from '@/components/account/ModeSwitch';
+import { SandboxBar } from '@/components/account/SandboxBar';
+import { AddFundsDialog } from '@/components/account/AddFundsDialog';
+
+/** How many of the latest report cards keep their prices live. */
+const LIVE_REPORTS = 2;
 
 const uid = () => Math.random().toString(36).slice(2);
 
@@ -67,6 +73,12 @@ function Arena({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
   const [spent, setSpent] = useState<Set<string>>(new Set());
   /** Cards currently being re-priced, so only that one shows a spinner. */
   const [repricing, setRepricing] = useState<Set<string>>(new Set());
+  /** Sandbox or live. The server holds the truth; this mirrors it. */
+  const [mode, setMode] = useState<TradingMode>(me.mode ?? 'sandbox');
+  /** Bumped after trades and deposits so balances on screen reload. */
+  const [balanceKey, setBalanceKey] = useState(0);
+  const refreshBalances = () => setBalanceKey((k) => k + 1);
+  const [addingFunds, setAddingFunds] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<ComposerHandle>(null);
@@ -101,7 +113,8 @@ function Arena({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
   }, [fail]);
 
   useEffect(() => {
-    void refreshConversations();
+    const t = setTimeout(refreshConversations, 0);
+    return () => clearTimeout(t);
   }, [refreshConversations]);
 
   useEffect(() => {
@@ -117,7 +130,7 @@ function Arena({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
    * had been said.
    */
   const ask = useCallback(
-    async (text: string) => {
+    async (text: string): Promise<AgentReply | null> => {
       push({ id: uid(), role: 'user', text });
       setBusy(true);
       try {
@@ -134,10 +147,14 @@ function Arena({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
           toolsUsed: turn.toolsUsed,
           truncated: turn.truncated,
         });
+        return turn;
       } catch (e) {
         fail(e);
+        return null;
       } finally {
         setBusy(false);
+        // A turn may have traded or added paper funds.
+        setBalanceKey((k) => k + 1);
       }
     },
     [conversationId, fail, refreshConversations],
@@ -164,10 +181,19 @@ function Arena({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
    * portfolio lands in this conversation as a card — something that can be
    * scrolled back to and discussed, which a modal cannot.
    */
-  const openPortfolio = () => {
+  const openPortfolio = async () => {
     if (busy) return;
     setMobileView('desk');
-    void ask('Show my portfolio');
+    const turn = await ask('Show my portfolio');
+    // The button must always end in the card. If the agent could not draw it —
+    // out of credits, offline, or it answered without the tool — fetch the
+    // portfolio directly and show it here.
+    if (turn?.step?.kind === 'portfolio') return;
+    try {
+      push({ id: uid(), role: 'card', step: await api.portfolio() });
+    } catch (e) {
+      fail(e);
+    }
   };
 
   const openConversation = async (id: string) => {
@@ -202,7 +228,29 @@ function Arena({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
   };
 
   /** A step produced by acting on a card, rather than by asking the agent. */
-  const land = (step: TradeStep) => push({ id: uid(), role: 'card', step });
+  const land = (step: TradeStep) => {
+    push({ id: uid(), role: 'card', step });
+    refreshBalances();
+  };
+
+  /**
+   * Flips the mode on the server, then here. A note goes into the transcript
+   * so cards above and below it read in context.
+   */
+  const switchMode = async (next: TradingMode) => {
+    try {
+      const r = await api.setMode(next);
+      setMode(r.mode);
+      push({
+        id: uid(),
+        role: 'notice',
+        text: r.mode === 'sandbox' ? 'Switched to Sandbox — paper money from here on.' : 'Switched to Live — trades now use real money.',
+      });
+      refreshBalances();
+    } catch (e) {
+      fail(e);
+    }
+  };
 
   /** Runs a step without retiring the card it came from. */
   const run = async (work: () => Promise<TradeStep>) => {
@@ -258,9 +306,37 @@ function Arena({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
     }
   };
 
+  /**
+   * The two most recent report cards update live; older ones stay snapshots.
+   * Two, not all: every live card polls the chain, and a long conversation
+   * about ten tokens should not keep ten polls running for cards scrolled
+   * far out of view.
+   */
+  const liveReports = useMemo(() => {
+    const ids = new Set<string>();
+    let reports = 0;
+    let portfolio = false;
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const e = entries[i];
+      if (e.role !== 'agent' && e.role !== 'card') continue;
+      if (e.step?.kind === 'token_report' && reports < LIVE_REPORTS) {
+        ids.add(e.id);
+        reports += 1;
+      }
+      // One live portfolio card — the latest. Older ones are the record of
+      // their moment, and two live copies of the same account say nothing new.
+      if (e.step?.kind === 'portfolio' && !portfolio) {
+        ids.add(e.id);
+        portfolio = true;
+      }
+    }
+    return ids;
+  }, [entries]);
+
   /** Every card handler, keyed to the entry that drew the card. */
   const cardProps = (entryId: string, step: TradeStep) => ({
     step,
+    live: liveReports.has(entryId),
     busy,
     spent: 'intentId' in step ? spent.has(`${entryId}:${step.intentId}`) : false,
     repricing: repricing.has(entryId),
@@ -270,8 +346,11 @@ function Arena({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
       void run(() => api.selectPool(intentId, poolId)),
     onSubmitAmount: (intentId: string, amount: number) =>
       act(`${entryId}:${intentId}`, () => api.setAmount(intentId, amount)),
+    onSubmitPercent: (intentId: string, percent: number) =>
+      act(`${entryId}:${intentId}`, () => api.setPercent(intentId, percent)),
     onRequote: (intentId: string) => void requote(entryId, intentId),
     onPickToken: openToken,
+    onAddFunds: () => setAddingFunds(true),
     onAsk: (text: string) => {
       if (busy) return;
       setMobileView('desk');
@@ -289,7 +368,8 @@ function Arena({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
 
   return (
     <div className="grid h-dvh grid-cols-1 grid-rows-[auto_auto_minmax(0,1fr)] bg-bg font-display text-fg lg:grid-cols-[15rem_minmax(0,1fr)_20rem] lg:grid-rows-[auto_minmax(0,1fr)]">
-      <header className="col-span-full flex min-h-14 items-center gap-3 border-b border-border-base px-4 py-3 sm:px-6">
+      <div className="col-span-full">
+      <header className="flex min-h-14 items-center gap-2 border-b border-border-base px-3 py-3 sm:gap-3 sm:px-6">
         <Link
           href="/"
           aria-label="Arena 67 home"
@@ -300,13 +380,14 @@ function Arena({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
             67
           </span>
         </Link>
-        <span className="h-4 w-px bg-border-strong" aria-hidden="true" />
-        <span className="font-ticker text-[10px] uppercase tracking-[0.12em] text-fg-subtle">
+        <span className="hidden h-4 w-px bg-border-strong md:block" aria-hidden="true" />
+        <span className="hidden font-ticker text-[10px] uppercase tracking-[0.12em] text-fg-subtle md:inline">
           Robinhood Chain
         </span>
 
-        <div className="ml-auto flex items-center gap-2">
-          <WalletBox onOpenPortfolio={openPortfolio} disabled={busy} />
+        <div className="ml-auto flex min-w-0 items-center gap-1 sm:gap-2">
+          <ModeSwitch mode={mode} walletAddress={me.wallet.address} onChange={switchMode} disabled={busy} />
+          <WalletBox onOpenPortfolio={openPortfolio} disabled={busy} mode={mode} refreshKey={balanceKey} />
           <button
             type="button"
             onClick={signOut}
@@ -318,6 +399,21 @@ function Arena({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
           </button>
         </div>
       </header>
+      {mode === 'sandbox' && <SandboxBar refreshKey={balanceKey} onAddFunds={() => setAddingFunds(true)} />}
+      </div>
+
+      <AnimatePresence>
+        {addingFunds && (
+          <AddFundsDialog
+            onClose={() => setAddingFunds(false)}
+            onDone={(note) => {
+              setAddingFunds(false);
+              push({ id: uid(), role: 'notice', text: note });
+              refreshBalances();
+            }}
+          />
+        )}
+      </AnimatePresence>
 
       <nav
         aria-label="Workspace views"
@@ -428,6 +524,15 @@ function Arena({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
                   >
                     {e.text}
                   </motion.div>
+                ) : e.role === 'notice' ? (
+                  <motion.p
+                    key={e.id}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="self-center rounded-full border border-border-base px-3 py-1 text-[11px] text-fg-subtle"
+                  >
+                    {e.text}
+                  </motion.p>
                 ) : e.role === 'error' ? (
                   <motion.p
                     key={e.id}
@@ -438,10 +543,22 @@ function Arena({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
                     {e.text}
                   </motion.p>
                 ) : e.role === 'agent' ? (
-                  <AgentMessage key={e.id} text={e.text} toolsUsed={e.toolsUsed} truncated={e.truncated}>
-                    {/* The prose explains; the card carries the numbers and
-                        the button that signs. */}
-                    {e.step && <StepCard {...cardProps(e.id, e.step)} bare />}
+                  <AgentMessage
+                    key={e.id}
+                    text={e.text}
+                    toolsUsed={e.toolsUsed}
+                    truncated={e.truncated}
+                    hideText={!!e.step && CARD_OWNS_NOTE.has(e.step.kind)}
+                  >
+                    {/* Research and portfolio cards carry the agent's comment
+                        inside them; trade cards keep it above as the prompt. */}
+                    {e.step && (
+                      <StepCard
+                        {...cardProps(e.id, e.step)}
+                        note={CARD_OWNS_NOTE.has(e.step.kind) ? e.text : undefined}
+                        bare
+                      />
+                    )}
                   </AgentMessage>
                 ) : (
                   <StepCard key={e.id} {...cardProps(e.id, e.step)} />

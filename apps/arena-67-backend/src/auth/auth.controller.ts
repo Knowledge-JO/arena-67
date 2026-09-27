@@ -23,6 +23,7 @@ import {
   REFRESH_TTL_SECONDS,
 } from './auth.constants';
 import { UserWalletService } from '../accounts/user-wallet.service';
+import { SandboxService } from '../sandbox/sandbox.service';
 
 const EmailBody = z.object({ email: z.string().trim().email().max(254) });
 const VerifyBody = EmailBody.extend({
@@ -40,6 +41,7 @@ export class AuthController {
   constructor(
     private readonly auth: AuthService,
     private readonly wallets: UserWalletService,
+    private readonly sandbox: SandboxService,
   ) {}
 
   /** Same response for a new address and a known one — no account oracle. */
@@ -61,6 +63,7 @@ export class AuthController {
       isNewUser,
       user: { id: userId, email: email.trim().toLowerCase() },
       wallet: { address: await this.wallets.addressOf(userId) },
+      mode: await this.sandbox.mode(userId),
     };
   }
 
@@ -95,6 +98,7 @@ export class AuthController {
     return {
       user: { id: user.id, email: user.email },
       wallet: { address: await this.wallets.addressOf(user.id) },
+      mode: await this.sandbox.mode(user.id),
     };
   }
 

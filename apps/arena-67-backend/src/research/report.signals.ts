@@ -27,6 +27,8 @@ export interface TokenReport {
   /** Where it can be traded here: deepest v4 pool per quote asset. */
   pools: TokenPool[];
   holders: HoldersBlock;
+  /** Measured on-chain; null when it could not be measured. */
+  transferTax?: { buyPct: number; sellPct: number } | null;
   signals: Signal[];
   explorer: string;
   asOf: string;
@@ -105,6 +107,16 @@ export function signalsFor(r: TokenReport, now = Date.now()): Signal[] {
       tone: 'caution',
       text: 'Holder counts are approximate: this token’s balances do not add up from its transfers (it may charge a fee on transfer or rebase). Top holders are still exact.',
     });
+  }
+
+  const tax = r.transferTax;
+  if (tax && (tax.buyPct > 0 || tax.sellPct > 0)) {
+    out.push({
+      tone: 'caution',
+      text: `Transfer tax: the token itself takes ${tax.buyPct}% of every buy and ${tax.sellPct}% of every sell, on top of pool fees.`,
+    });
+  } else if (tax) {
+    out.push({ tone: 'good', text: 'No transfer tax — the token does not take a cut when you buy or sell.' });
   }
 
   const owner = r.token.owner;

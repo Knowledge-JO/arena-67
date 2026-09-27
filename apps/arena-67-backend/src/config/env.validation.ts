@@ -98,6 +98,14 @@ export const envSchema = z.object({
 
   /** Overrides the network's default RPC. Must match the selected chain id. */
   RPC_URL: z.string().url().optional(),
+  /**
+   * The RPC budget, shared by everything. Defaults suit the public endpoint
+   * (it refuses bursts of ~15+); raise them with a paid RPC_URL.
+   */
+  RPC_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(8),
+  RPC_MAX_RPS: z.coerce.number().int().min(1).max(1000).default(10),
+  /** In-flight slots background indexing may use, out of RPC_MAX_CONCURRENCY. */
+  RPC_BACKGROUND_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(3),
 
   /**
    * Hard ceiling, in USD, on any single swap. The agent cannot be talked past

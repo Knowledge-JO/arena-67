@@ -2,7 +2,7 @@
 
 import { motion } from 'motion/react';
 import { useEffect, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { FlaskConical, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /** Matches QUOTE_TTL_MS in the backend's pending-intent.store.ts. */
@@ -27,8 +27,11 @@ export function ConfirmCard({
   disabled,
   spent,
   repricing,
+  mode = 'live',
 }: {
   summary: Record<string, string>;
+  /** Sandbox cards say "paper" everywhere a real one says "sign". */
+  mode?: 'sandbox' | 'live';
   onConfirm: () => void;
   /** Fetches a fresh price for the same venue. */
   onRequote: () => void;
@@ -62,11 +65,20 @@ export function ConfirmCard({
     'receive',
     'guaranteedMinimum',
     'poolFee',
+    'networkFee',
+    'transferTax',
+    'paperNote',
   ];
   const label: Record<string, string> = {
     guaranteedMinimum: 'guaranteed minimum',
     poolFee: 'pool fee',
+    networkFee: 'network fee',
+    transferTax: 'transfer tax',
+    paperNote: 'note',
   };
+  /** Sentences, not figures: these wrap rather than cut off. */
+  const prose = new Set(['networkFee', 'transferTax', 'paperNote']);
+  const taxed = /\d+(\.\d+)?% on buys/.test(summary.transferTax ?? '');
   const rows = order.filter((k) => k in summary);
 
   return (
@@ -74,8 +86,18 @@ export function ConfirmCard({
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.22, ease: 'easeOut' }}
-      className="mt-3 overflow-hidden rounded-xl border border-border-base bg-surface-raised"
+      className={cn(
+        'mt-3 overflow-hidden rounded-xl border bg-surface-raised',
+        mode === 'sandbox' ? 'border-amber-400/30' : 'border-border-base',
+      )}
     >
+      {mode === 'sandbox' && (
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 border-b border-amber-400/20 bg-amber-400/[0.07] px-3.5 py-2 text-[11px] text-amber-200">
+          <FlaskConical size={12} aria-hidden="true" />
+          <span className="whitespace-nowrap font-semibold">Paper trade</span>
+          <span className="text-amber-200/70">· real mainnet price, no real funds move</span>
+        </div>
+      )}
       <dl className="divide-y divide-border-base/70">
         {rows.map((k) => (
           <div key={k} className="flex items-baseline gap-3 px-3.5 py-2.5">
@@ -84,9 +106,11 @@ export function ConfirmCard({
             </dt>
             <dd
               className={cn(
-                'min-w-0 flex-1 truncate text-sm',
+                'min-w-0 flex-1 text-sm',
+                prose.has(k) ? 'text-[13px] leading-snug text-fg-muted' : 'truncate',
                 k === 'contract' && 'font-mono text-[11px] text-fg-muted',
                 k === 'guaranteedMinimum' && 'font-medium text-positive',
+                k === 'transferTax' && taxed && 'font-medium text-amber-300',
               )}
             >
               {summary[k]}
@@ -150,11 +174,13 @@ export function ConfirmCard({
             className={cn(
               'ml-auto rounded-lg px-4 py-2 text-sm font-medium transition-colors',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60',
-              'bg-accent text-accent-fg hover:opacity-90',
+              mode === 'sandbox' ? 'bg-amber-400 text-bg hover:opacity-90' : 'bg-accent text-accent-fg hover:opacity-90',
               'disabled:cursor-not-allowed disabled:opacity-40',
             )}
           >
-            {spent ? 'Confirmed' : 'Confirm & sign'}
+            {spent
+              ? mode === 'sandbox' ? 'Placed' : 'Confirmed'
+              : mode === 'sandbox' ? 'Place paper trade' : 'Confirm & sign'}
           </button>
         )}
       </div>

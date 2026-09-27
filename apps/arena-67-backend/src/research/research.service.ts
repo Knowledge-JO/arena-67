@@ -13,6 +13,9 @@ export interface TrendingToken {
   priceUsd: number | null;
   priceChange24h: number | null;
   volume24h: number | null;
+  marketCap: number | null;
+  /** When its first trading pool opened (epoch ms) — its launch, in practice. */
+  launchedAt: number | null;
   imageUrl: string | null;
 }
 
@@ -103,10 +106,16 @@ export class ResearchService implements OnModuleInit {
           priceUsd: null,
           priceChange24h: null,
           volume24h: null,
+          marketCap: null,
+          launchedAt: null,
           imageUrl: null,
         };
         try {
-          const m = await this.market.forToken(t.address);
+          // Both read the same cached pairs; no extra upstream request.
+          const [m, overview] = await Promise.all([
+            this.market.forToken(t.address),
+            this.market.overview(t.address).catch(() => null),
+          ]);
           if (!m) return base;
           return {
             ...base,
@@ -115,6 +124,8 @@ export class ResearchService implements OnModuleInit {
             priceUsd: m.stats?.priceUsd ?? null,
             priceChange24h: m.stats?.priceChange24h ?? null,
             volume24h: m.stats?.volume24h ?? null,
+            marketCap: m.stats?.marketCap ?? null,
+            launchedAt: overview?.firstPoolAt ?? null,
             imageUrl: m.imageUrl,
           };
         } catch {

@@ -18,7 +18,10 @@ export function AgentMessage({
   toolsUsed,
   truncated,
   children,
+  hideText = false,
 }: {
+  /** Set when the card below shows the text itself, as its note. */
+  hideText?: boolean;
   text: string;
   toolsUsed: string[];
   truncated: boolean;
@@ -58,9 +61,11 @@ export function AgentMessage({
             library: model output is untrusted, and building elements
             directly means nothing it writes can become HTML.
           */}
-          <div className="text-sm leading-relaxed text-fg">
-            <RichText text={text} />
-          </div>
+          {!hideText && (
+            <div className="text-sm leading-relaxed text-fg">
+              <RichText text={text} />
+            </div>
+          )}
 
           {truncated && (
             <p

@@ -5,16 +5,19 @@ import { motion } from 'motion/react';
 import Lenis from 'lenis';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { usdCompact } from '@/lib/format';
 import type { TrendingSnapshot } from '@/lib/types';
+import { TokenAvatar } from './shared';
 
 const POLL_MS = 30_000;
 
 /**
  * The research half of the arena.
  *
- * Rows are labelled "pools", not "24h volume", because pool count is what the
- * backend actually measures. Showing a volume column we aren't computing would
- * be inventing numbers on a trading screen.
+ * Tokens are ranked by how many pools have opened against them recently —
+ * what the backend measures from the chain. Each row shows what a person
+ * weighs first: its logo and name, market cap, and how long ago it launched.
+ * A missing figure is a dash, never a zero.
  */
 export function TrendingPane({
   onPick,
@@ -87,7 +90,10 @@ export function TrendingPane({
 
           {!failed && !snap &&
             Array.from({ length: 8 }).map((_, i) => (
-              <div key={i} className="mx-1 mb-1.5 h-12 animate-pulse rounded-lg bg-surface-raised/60" />
+              <div key={i} className="mx-1 mb-1.5 flex h-12 items-center gap-2.5 px-1.5">
+                <div className="h-8 w-8 shrink-0 animate-pulse rounded-full bg-surface-raised/80" />
+                <div className="h-8 flex-1 animate-pulse rounded-md bg-surface-raised/60" />
+              </div>
             ))}
 
           {snap?.tokens.length === 0 && !warming && (
@@ -112,17 +118,51 @@ export function TrendingPane({
                 'focus-visible:ring-2 focus-visible:ring-accent/60',
               )}
             >
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="truncate text-sm font-medium">{t.symbol}</span>
-                <span className="shrink-0 tabular-nums text-[11px] text-fg-subtle">
-                  {t.poolCount} {t.poolCount === 1 ? 'pool' : 'pools'}
-                </span>
+              <div className="flex items-center gap-2.5">
+                {/* Logo from the market listing; initials when there is none. */}
+                <TokenAvatar symbol={t.symbol} imageUrl={t.imageUrl} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="truncate text-sm font-medium">{t.symbol}</span>
+                    <span className="shrink-0 tabular-nums text-[12px] text-fg" title="Market cap">
+                      {usdCompact(t.marketCap)}
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-2">
+                    <p className="truncate text-[11px] text-fg-muted">{t.name}</p>
+                    <span
+                      className="shrink-0 tabular-nums text-[11px] text-fg-subtle"
+                      title={
+                        t.launchedAt
+                          ? `Launched ${new Date(t.launchedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} — when its first trading pool opened`
+                          : 'Launch time unknown'
+                      }
+                    >
+                      {ageShort(t.launchedAt)}
+                    </span>
+                  </div>
+                </div>
               </div>
-              <p className="truncate text-[11px] text-fg-muted">{t.name}</p>
             </motion.button>
           ))}
         </div>
       </div>
     </aside>
   );
+}
+
+/**
+ * How long ago a token launched, short enough for a sidebar: "45m old",
+ * "3h old", "2d old", "4mo old". Launch is when its first trading pool opened
+ * — the chain keeps no history to read the contract's own deploy time from.
+ */
+function ageShort(at: number | null | undefined, now = Date.now()): string {
+  if (!at) return '—';
+  const m = Math.max(0, (now - at) / 60_000);
+  if (m < 60) return `${Math.max(1, Math.round(m))}m old`;
+  const h = m / 60;
+  if (h < 48) return `${Math.round(h)}h old`;
+  const d = h / 24;
+  if (d < 60) return `${Math.round(d)}d old`;
+  return `${Math.round(d / 30)}mo old`;
 }

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { isAddress, getAddress } from 'viem';
 import { ChainService } from '../chain/chain.service';
@@ -54,7 +54,15 @@ export class TokensService {
         liquidityUsd: 0,
         warnings: [],
       };
-    } catch {
+    } catch (err) {
+      // "Could not ask" is not "not a token". Reporting a network blip as the
+      // latter told a user a $220M token did not exist.
+      if (isTransportError(err)) {
+        this.log.warn(`could not reach the chain to describe ${token}`);
+        throw new ServiceUnavailableException(
+          'I could not reach Robinhood Chain to check that token. Please try again in a moment.',
+        );
+      }
       this.log.warn(`${token} did not answer ERC-20 calls`);
       return null;
     }
@@ -94,4 +102,30 @@ export class TokensService {
       ],
     }));
   }
+}
+
+/**
+ * True when a call failed on the way to the chain (HTTP, timeout, socket)
+ * rather than being answered by it. A revert, or a contract with no such
+ * function, is an answer.
+ */
+export function isTransportError(err: unknown): boolean {
+  let e: unknown = err;
+  for (let depth = 0; e && depth < 8; depth++) {
+    const name = (e as { name?: string }).name ?? '';
+    const code = (e as { code?: string }).code;
+    if (
+      name === 'HttpRequestError' ||
+      name === 'TimeoutError' ||
+      name === 'WebSocketRequestError' ||
+      code === 'ETIMEDOUT' ||
+      code === 'ECONNRESET' ||
+      code === 'ENETUNREACH' ||
+      code === 'EAI_AGAIN'
+    ) {
+      return true;
+    }
+    e = (e as { cause?: unknown }).cause;
+  }
+  return false;
 }

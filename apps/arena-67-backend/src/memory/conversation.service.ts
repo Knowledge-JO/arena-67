@@ -95,12 +95,16 @@ export class ConversationService {
   async recent(userId: string, conversationId: string, limit = 12) {
     await this.assertOwned(userId, conversationId);
     const rows = await this.db
-      .select({ role: messages.role, content: messages.content })
+      .select({ role: messages.role, content: messages.content, step: messages.step })
       .from(messages)
       .where(eq(messages.conversationId, conversationId))
       .orderBy(desc(messages.createdAt))
       .limit(limit);
-    return rows.reverse();
+    return rows.reverse().map((r) => ({
+      role: r.role as 'user' | 'assistant',
+      content: r.content,
+      stepKind: ((r.step as { kind?: string } | null)?.kind ?? null) as string | null,
+    }));
   }
 
   async append(userId: string, conversationId: string, turn: StoredTurn): Promise<void> {

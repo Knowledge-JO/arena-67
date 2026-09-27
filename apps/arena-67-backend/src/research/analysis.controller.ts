@@ -15,6 +15,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ChainService } from '../chain/chain.service';
 import { HoldersService, MAX_OVERLAP_TOKENS, MAX_TOP_N } from '../holders/holders.service';
 import { ReportService } from './report.service';
+import { LivePriceService } from '../market/live-price.service';
 import { VolumeService } from './volume.service';
 
 const LABELS = ['wallet', 'pool', 'burn', 'token', 'contract'] as const;
@@ -54,11 +55,22 @@ export class AnalysisController {
     private readonly holders: HoldersService,
     private readonly volume: VolumeService,
     private readonly chain: ChainService,
+    private readonly livePrice: LivePriceService,
   ) {}
 
   @Get('tokens/:address/report')
   report(@Param('address') a: string) {
     return this.reports.report(address(a));
+  }
+
+  /**
+   * Live price and market figures for an open report card. Cheap by design —
+   * cards poll it every few seconds — so it queues nothing and reads one
+   * cached slot0 per token.
+   */
+  @Get('tokens/:address/live')
+  live(@Param('address') a: string) {
+    return this.livePrice.live(address(a));
   }
 
   @Get('tokens/:address/holders')

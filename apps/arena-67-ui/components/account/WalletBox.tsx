@@ -1,9 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Check, Copy, Wallet } from 'lucide-react';
+import { Check, Copy, FlaskConical, Wallet } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn, shortAddress } from '@/lib/utils';
+import { usdExact } from '@/lib/format';
+import type { TradingMode } from '@/lib/types';
 
 const POLL_MS = 20_000;
 
@@ -19,26 +21,59 @@ const POLL_MS = 20_000;
 export function WalletBox({
   onOpenPortfolio,
   disabled,
+  mode = 'live',
+  refreshKey = 0,
 }: {
   onOpenPortfolio: () => void;
   disabled?: boolean;
+  /** In sandbox the box shows the paper account's value instead of real ETH. */
+  mode?: TradingMode;
+  refreshKey?: number;
 }) {
   const [bal, setBal] = useState<{ address: string; eth: string } | null>(null);
+  const [paperUsd, setPaperUsd] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      setBal(await api.balance());
+      if (mode === 'sandbox') setPaperUsd((await api.sandbox()).totalUsd);
+      else setBal(await api.balance());
     } catch {
       /* keep showing the last good value */
     }
-  }, []);
+  }, [mode]);
 
   useEffect(() => {
-    void load();
+    // First load on the next tick, then on the interval.
+    const first = setTimeout(load, 0);
     const t = setInterval(load, POLL_MS);
-    return () => clearInterval(t);
-  }, [load]);
+    return () => {
+      clearTimeout(first);
+      clearInterval(t);
+    };
+  }, [load, refreshKey]);
+
+  if (mode === 'sandbox') {
+    return (
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onOpenPortfolio}
+        title="Your paper portfolio"
+        className={cn(
+          'inline-flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs font-medium tabular-nums transition-colors sm:px-2.5',
+          'border-amber-400/30 bg-amber-400/[0.07] text-amber-100 hover:bg-amber-400/15',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60',
+          'disabled:cursor-not-allowed disabled:opacity-50',
+        )}
+      >
+        {/* The sandbox strip right below says "Sandbox"; phones need the room. */}
+        <FlaskConical size={13} className="hidden text-amber-300 sm:block" />
+        {paperUsd === null ? '—' : usdExact(paperUsd)}
+        <span className="sr-only">paper balance</span>
+      </button>
+    );
+  }
 
   const eth = bal ? Number(bal.eth) : null;
   const lowGas = eth !== null && eth < 0.0005;

@@ -44,6 +44,7 @@ async function beginTrade(
       ticker?: string;
       contractAddress?: string;
       amount?: number;
+      percent?: number;
       currency?: string;
     };
   },
@@ -62,7 +63,7 @@ async function selectPool(
 
 async function setAmount(
   api: AxiosInstance,
-  body: { intentId: string; amount: number },
+  body: { intentId: string; amount?: number; percent?: number },
 ): Promise<TradeStep> {
   const { data } = await api.post<TradeStep>('/trade/amount', body);
   return data;
@@ -124,7 +125,22 @@ async function getWalletHoldings(api: AxiosInstance, address: string): Promise<R
   return data;
 }
 
+async function addPaperFunds(
+  api: AxiosInstance,
+  body: { asset: 'ETH' | 'USDG'; amount: string },
+): Promise<Record<string, unknown>> {
+  const { data } = await api.post('/sandbox/deposit', body);
+  return data;
+}
+
+async function getMode(api: AxiosInstance): Promise<{ mode: 'sandbox' | 'live' }> {
+  const { data } = await api.get('/account/mode');
+  return data;
+}
+
 export {
+  addPaperFunds,
+  getMode,
   findCommonHolders,
   getTokenReport,
   getTopHolders,

@@ -110,6 +110,18 @@ describe('report signals', () => {
     expect(t.some((x) => x.includes('still in the liquidity pool'))).toBe(true);
   });
 
+  it('names a transfer tax, and says so when there is none', () => {
+    const taxed = report({});
+    taxed.transferTax = { buyPct: 5, sellPct: 10 };
+    expect(texts(taxed).some((x) => x.startsWith('caution: Transfer tax') && x.includes('5% of every buy'))).toBe(true);
+    const clean = report({});
+    clean.transferTax = { buyPct: 0, sellPct: 0 };
+    expect(texts(clean).some((x) => x.startsWith('good: No transfer tax'))).toBe(true);
+    const unknown = report({});
+    unknown.transferTax = null;
+    expect(texts(unknown).some((x) => /transfer tax/i.test(x))).toBe(false);
+  });
+
   it('flags drift', () => {
     const t = texts(report({ holders: { drift: { indexedPercentOfSupply: 91 } } }));
     expect(t.some((x) => x.includes('approximate'))).toBe(true);

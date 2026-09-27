@@ -5,6 +5,7 @@ import { ChevronRight } from 'lucide-react';
 import { usd, usdCompact } from '@/lib/format';
 import type { WalletHoldings } from '@/lib/types';
 import { AddressChip, KindBadge, asOf, pctOfSupply } from './shared';
+import { CardNote } from '../chat/CardNote';
 
 /**
  * What another address holds — the follow-up to "who is this wallet" from a
@@ -15,7 +16,10 @@ export function WalletHoldingsCard({
   data,
   onPickToken,
   disabled,
+  note,
 }: {
+  /** The agent's comment, shown inside the card. */
+  note?: string;
   data: WalletHoldings;
   onPickToken: (address: string, symbol: string) => void;
   disabled?: boolean;
@@ -44,6 +48,7 @@ export function WalletHoldingsCard({
           </div>
         )}
       </header>
+      <CardNote text={note} />
 
       {data.holdings.length === 0 ? (
         <p className="border-t border-border-base px-4 py-4 text-sm text-fg-muted">

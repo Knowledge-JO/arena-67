@@ -4,11 +4,13 @@ import type {
   HolderOverlap,
   HoldersBlock,
   HoldersStatus,
+  LiveMarket,
   ConversationSummary,
   Me,
   Portfolio,
   StoredMessage,
   TradeStep,
+  TradingMode,
   TrendingSnapshot,
 } from './types';
 
@@ -96,6 +98,14 @@ export const api = {
     return null;
   },
 
+  // --- sandbox / live
+  setMode: (mode: TradingMode) =>
+    request<{ mode: TradingMode }>('/account/mode', { method: 'PUT', body: JSON.stringify({ mode }) }),
+  sandbox: () => request<Portfolio>('/sandbox'),
+  depositPaper: (asset: 'ETH' | 'USDG', amount: string) =>
+    post<{ ok: boolean; valueUsd: number; portfolio: Portfolio }>('/sandbox/deposit', { asset, amount }),
+  resetSandbox: () => post<{ ok: boolean; portfolio: Portfolio }>('/sandbox/reset'),
+
   // --- wallet
   balance: () => request<{ address: string; eth: string }>('/wallet/balance'),
   portfolio: () => request<Portfolio>('/wallet/portfolio'),
@@ -116,6 +126,9 @@ export const api = {
     post<TradeStep>('/trade/select-token', { intentId, candidateId }),
   setAmount: (intentId: string, amount: number) =>
     post<TradeStep>('/trade/amount', { intentId, amount }),
+  /** Size as a share of what is held; the backend works out the exact amount. */
+  setPercent: (intentId: string, percent: number) =>
+    post<TradeStep>('/trade/amount', { intentId, percent }),
   selectPool: (intentId: string, poolId: string) =>
     post<TradeStep>('/trade/select-pool', { intentId, poolId }),
   requote: (intentId: string) => post<TradeStep>('/trade/requote', { intentId }),
@@ -128,6 +141,7 @@ export const api = {
     request<Array<{ address: string; status: HoldersStatus; progress: number }>>(
       `/research/holders/status?tokens=${tokens.join(',')}`,
     ),
+  liveMarket: (address: string) => request<LiveMarket>(`/research/tokens/${address}/live`),
   tokenHolders: (address: string, limit = 10) =>
     request<HoldersBlock & { address: string }>(`/research/tokens/${address}/holders?limit=${limit}`),
   commonHolders: (body: { tokens: string[]; topN?: number; minTokens?: number; include?: HolderKind[] }) =>

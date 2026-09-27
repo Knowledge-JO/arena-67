@@ -3,6 +3,7 @@ import { formatUnits, getAddress, isAddress } from 'viem';
 import { ChainService } from '../chain/chain.service';
 import { MarketService } from '../market/market.service';
 import { HoldersService } from '../holders/holders.service';
+import { TransferTaxService } from '../chain/transfer-tax.service';
 import { signalsFor, type TokenReport } from './report.signals';
 
 export type { Signal, TokenReport } from './report.signals';
@@ -25,6 +26,7 @@ export class ReportService {
     private readonly chain: ChainService,
     private readonly market: MarketService,
     private readonly holders: HoldersService,
+    private readonly taxes: TransferTaxService,
   ) {}
 
   async report(address: string): Promise<ReportResult> {
@@ -49,6 +51,8 @@ export class ReportService {
     }
 
     const decimals = info?.decimals ?? 18;
+    // One whole token is a size any pool holding it can move.
+    const transferTax = info ? await this.taxes.measure(token, 10n ** BigInt(decimals)) : null;
     const report: TokenReport = {
       kind: 'token_report',
       token: {
@@ -65,6 +69,7 @@ export class ReportService {
       market: overview,
       pools: view?.pools ?? [],
       holders,
+      transferTax,
       signals: [],
       explorer: this.chain.network.explorer,
       asOf: new Date().toISOString(),

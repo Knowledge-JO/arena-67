@@ -85,7 +85,7 @@ export class PoolIndexService implements OnModuleInit {
   private async start(attempt = 1): Promise<void> {
     let head: bigint;
     try {
-      head = await this.chain.client.getBlockNumber();
+      head = await this.chain.latestBlock();
     } catch (e) {
       const wait = Math.min(60, 5 * attempt);
       this.log.warn(`pool index cannot read the chain head yet, retrying in ${wait}s: ${(e as Error).message.split('\n')[0]}`);
@@ -115,7 +115,7 @@ export class PoolIndexService implements OnModuleInit {
   async catchUp(): Promise<void> {
     if (!this.lastBlock) return;
     try {
-      const head = await this.chain.client.getBlockNumber();
+      const head = await this.chain.latestBlock();
       if (head > this.lastBlock) await this.scan(this.lastBlock + 1n, head);
     } catch (e) {
       this.log.warn(`pool index catch-up failed: ${(e as Error).message}`);
@@ -126,7 +126,7 @@ export class PoolIndexService implements OnModuleInit {
     for (let start = from; start <= to; start += CHUNK) {
       const end = start + CHUNK - 1n > to ? to : start + CHUNK - 1n;
       try {
-        const logs = await this.chain.client.getLogs({
+        const logs = await this.chain.backgroundClient.getLogs({
           address: this.chain.network.uniswapV4.POOL_MANAGER,
           event: INITIALIZE_EVENT,
           fromBlock: start,

@@ -53,3 +53,60 @@ export function count(value: number | null | undefined): string {
 }
 
 export const DASH_CHAR = DASH;
+
+/**
+ * Exact dollars, for money someone is tracking: $1,634.16 rather than $1.6K.
+ * Market figures can be compact; a balance and its profit cannot — a $0.36
+ * loss next to "$1.6K" hides the one number the person is reading for.
+ */
+export function usdExact(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return DASH;
+  const abs = Math.abs(value);
+  // Money is counted in cents. A $0.0049 fee is "<$0.01", not "$0.004880";
+  // token *prices* (which do need the digits) use usd() instead.
+  // Half a cent and up rounds to the cent ($0.0098 is "$0.01"); only true
+  // specks read "<$0.01".
+  if (abs > 0 && abs < 0.005) return '<$0.01';
+  return `${value < 0 ? '−' : ''}$${abs.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/** Signed dollars: +$12.40 / −$0.36. */
+export function usdSigned(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return DASH;
+  // A rounding-level amount is neither a gain nor a loss.
+  if (Math.abs(value) < 0.005) return '$0.00';
+  return `${value >= 0 ? '+' : '−'}${usdExact(Math.abs(value))}`;
+}
+
+/** Signed percent with enough decimals that a small move is not "0.0%". */
+export function pctSigned(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return DASH;
+  const abs = Math.abs(value);
+  const digits = abs >= 10 ? 1 : abs >= 0.1 ? 2 : 3;
+  return `${value >= 0 ? '+' : '−'}${abs.toFixed(digits)}%`;
+}
+
+/**
+ * A token amount for reading, not copying: 11,789,473.85 becomes "11.79M".
+ * The exact figure belongs in a tooltip.
+ */
+export function amountShort(value: string | number): string {
+  const n = typeof value === 'string' ? Number(value) : value;
+  if (!Number.isFinite(n)) return DASH;
+  const abs = Math.abs(n);
+  if (abs >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
+  if (abs >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+  if (abs >= 1e3) return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  if (abs >= 1) return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  return n.toPrecision(4).replace(/\.?0+$/, '');
+}
+
+/** "just now", "5 min ago", "3 h ago", "2 days ago". */
+export function timeAgo(iso: string, now = Date.now()): string {
+  const s = Math.max(0, (now - new Date(iso).getTime()) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+  const d = Math.round(s / 86400);
+  return `${d} day${d === 1 ? '' : 's'} ago`;
+}

@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { ArrowUpRight, Check, Copy } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn, shortAddress } from '@/lib/utils';
-import type { HolderKind, HoldersStatus } from '@/lib/types';
+import type { HolderKind, HoldersStatus, LiveMarket } from '@/lib/types';
 
 /**
  * Plain words for each kind of holder. The people using this are not reading
@@ -244,6 +244,53 @@ export function useHolderProgress(tokens: string[], enabled: boolean) {
   return progress;
 }
 
+const LIVE_POLL_MS = 5_000;
+
+/**
+ * Live market figures for one token, refreshed every few seconds while
+ * `enabled`. Pauses while the tab is hidden — nobody is watching, and every
+ * poll is an RPC read — and resumes on return. A failed poll keeps the last
+ * good value on screen rather than blanking it.
+ */
+export function useLiveMarket(address: string, enabled: boolean) {
+  const [data, setData] = useState<LiveMarket | null>(null);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const tick = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      try {
+        const next = await api.liveMarket(address);
+        // A reply without a price (upstream blip) never replaces one on screen.
+        if (!cancelled) setData((prev) => (next.priceUsd == null && prev?.priceUsd != null ? prev : next));
+      } catch {
+        /* keep the last good figures */
+      }
+      if (!cancelled) timer = setTimeout(tick, LIVE_POLL_MS);
+    };
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && !cancelled) {
+        if (timer) clearTimeout(timer);
+        void tick();
+      }
+    };
+
+    void tick();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [address, enabled]);
+
+  return enabled ? data : null;
+}
+
 export function asOf(iso: string): string {
   const d = new Date(iso);
   const sameDay = d.toDateString() === new Date().toDateString();
@@ -268,3 +315,60 @@ export function age(firstPoolAt: number | null): string {
   if (d < 60) return `${Math.round(d)} days`;
   return `${Math.round(d / 30)} months`;
 }
+
+/** "Live" for cards that update, "Snapshot" for the ones that no longer do. */
+export function LiveBadge({
+  live,
+  asOfIso,
+  liveHint = 'Price is read from the chain every few seconds.',
+  snapshotHint = 'Only the two most recent reports in a conversation update live — ask again for fresh numbers.',
+}: {
+  live: boolean;
+  asOfIso: string;
+  liveHint?: string;
+  snapshotHint?: string;
+}) {
+  if (live) {
+    return (
+      <span
+        title={liveHint}
+        className="inline-flex items-center gap-1 rounded-full bg-positive/10 px-1.5 py-0.5 text-[10px] font-medium text-positive"
+      >
+        <span className="relative flex h-1.5 w-1.5">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-positive opacity-60" />
+          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-positive" />
+        </span>
+        Live
+      </span>
+    );
+  }
+  return (
+    <span
+      title={`Figures as of ${asOf(asOfIso)}. ${snapshotHint}`}
+      className="rounded-full bg-border-base px-1.5 py-0.5 text-[10px] font-medium text-fg-subtle"
+    >
+      Snapshot · {asOf(asOfIso)}
+    </span>
+  );
+}
+
+/**
+ * Which way the price just moved, and a key that changes on every move so the
+ * flash replays. Unchanged prices do not flash.
+ */
+export function usePriceFlash(price: number | null | undefined) {
+  const prev = useRef(price);
+  const [flash, setFlash] = useState<{ key: number; dir: 'up' | 'down' | null }>({ key: 0, dir: null });
+  useEffect(() => {
+    const before = prev.current;
+    prev.current = price;
+    if (before == null || price == null || before === price) return;
+    setFlash((f) => ({ key: f.key + 1, dir: price > before ? 'up' : 'down' }));
+  }, [price]);
+  return flash;
+}
+
+export function clock(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+

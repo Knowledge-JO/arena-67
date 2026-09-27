@@ -77,7 +77,7 @@ export class VolumeService implements OnModuleInit {
     // to read, and nothing else should wait on it.
     void (async () => {
       try {
-        const head = await this.chain.client.getBlockNumber();
+        const head = await this.chain.latestBlock();
         const from = head - BigInt(BOOT_MINUTES) * BLOCKS_PER_MINUTE;
         this.observedFrom = from;
         this.cursor = from - 1n;
@@ -94,7 +94,7 @@ export class VolumeService implements OnModuleInit {
   async tail(): Promise<void> {
     if (this.cursor == null) return;
     try {
-      await this.advance(await this.chain.client.getBlockNumber());
+      await this.advance(await this.chain.latestBlock());
     } catch (err) {
       this.log.warn(`swap tail failed: ${(err as Error).message.split('\n')[0]}`);
     }
@@ -109,7 +109,7 @@ export class VolumeService implements OnModuleInit {
         to: head,
         span: 5_000n,
         fetch: (a, b) =>
-          this.chain.client.getLogs({
+          this.chain.backgroundClient.getLogs({
             address: this.chain.network.uniswapV4.POOL_MANAGER,
             event: SWAP_EVENT,
             fromBlock: a,

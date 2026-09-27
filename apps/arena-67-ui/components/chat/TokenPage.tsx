@@ -25,7 +25,20 @@ interface Props {
   spent?: boolean;
   onSelectPool: (poolId: string) => void;
   onSubmitAmount: (amount: number) => void;
+  /** Sizes the trade as a share of what is held; the backend uses the exact balance. */
+  onSubmitPercent?: (percent: number) => void;
+  /** Buying or selling. Absent on cards saved before it existed — treated as a buy. */
+  action?: 'buy' | 'sell';
+  /** What is held of the asset being spent, once a venue is chosen. */
+  available?: { amount: string; symbol: string } | null;
 }
+
+const SHARES = [
+  [25, '25%'],
+  [50, '50%'],
+  [75, '75%'],
+  [100, 'Max'],
+] as const;
 
 /**
  * The token page: what you need to decide before committing money.
@@ -47,7 +60,11 @@ export function TokenPage({
   spent,
   onSelectPool,
   onSubmitAmount,
+  onSubmitPercent,
+  action = 'buy',
+  available,
 }: Props) {
+  const selling = action === 'sell';
   const [copied, setCopied] = useState(false);
   const [amount, setAmount] = useState('');
   const amountRef = useRef<HTMLInputElement>(null);
@@ -220,9 +237,21 @@ export function TokenPage({
             transition={{ duration: 0.2 }}
             className="mt-3 overflow-hidden"
           >
-            <label className="mb-1.5 block text-[10px] uppercase tracking-wide text-fg-subtle">
-              Amount to spend
-            </label>
+            {/*
+              A sell is sized in the token, a buy in the pool's other asset. This
+              label used to say "Amount to spend … USDG" on sells too, while the
+              backend read the number as tokens.
+            */}
+            <div className="mb-1.5 flex items-baseline justify-between gap-2">
+              <label className="text-[10px] uppercase tracking-wide text-fg-subtle">
+                {selling ? `How much ${token.symbol} to sell` : 'Amount to spend'}
+              </label>
+              {available && (
+                <span className="truncate text-[11px] tabular-nums text-fg-subtle">
+                  You have {available.amount} {available.symbol}
+                </span>
+              )}
+            </div>
             <div className="flex items-center gap-2">
               <div className="flex flex-1 items-center rounded-lg border border-border-base bg-surface px-3 focus-within:border-border-strong">
                 <input
@@ -243,7 +272,7 @@ export function TokenPage({
                   className="min-w-0 flex-1 bg-transparent py-2 text-sm tabular-nums placeholder:text-fg-subtle focus:outline-none disabled:opacity-50"
                 />
                 <span className="shrink-0 pl-2 text-xs font-medium text-fg-muted">
-                  {chosen.quoteSymbol}
+                  {selling ? token.symbol : chosen.quoteSymbol}
                 </span>
               </div>
               <button
@@ -261,6 +290,22 @@ export function TokenPage({
                 <ArrowUpRight size={13} />
               </button>
             </div>
+            {onSubmitPercent && available && Number(available.amount) > 0 && (
+              <div className="mt-2 flex gap-1.5" role="group" aria-label={selling ? 'Sell a share of what you hold' : 'Spend a share of what you hold'}>
+                {SHARES.map(([pct, label]) => (
+                  <button
+                    key={pct}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onSubmitPercent(pct)}
+                    title={`${selling ? 'Sell' : 'Spend'} ${pct}% of your ${available.symbol}`}
+                    className="min-h-8 flex-1 rounded-md border border-border-base text-xs font-medium tabular-nums text-fg-muted transition-colors hover:border-border-strong hover:text-fg disabled:opacity-40"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
           </motion.div>
         )}
       </div>

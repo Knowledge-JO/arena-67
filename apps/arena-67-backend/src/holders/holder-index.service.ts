@@ -2,7 +2,7 @@ import {
   Inject,
   Injectable,
   Logger,
-  OnApplicationShutdown,
+  OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -78,7 +78,7 @@ const TRACK_FOR_MS = 24 * 3_600_000;
  * indexed and report progress for the rest.
  */
 @Injectable()
-export class HolderIndexService implements OnModuleInit, OnApplicationShutdown {
+export class HolderIndexService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger(HolderIndexService.name);
   private readonly db: Database;
   /** token → priority, for tokens being backfilled right now. */
@@ -107,7 +107,12 @@ export class HolderIndexService implements OnModuleInit, OnApplicationShutdown {
       .where(eq(tokenIndexState.status, 'indexing'));
   }
 
-  onApplicationShutdown(): void {
+  /**
+   * Stops backfills and the tail between chunks. Runs in onModuleDestroy —
+   * before the database module closes its pool — rather than at the later
+   * application-shutdown stage, so no chunk is mid-write when the pool goes.
+   */
+  onModuleDestroy(): void {
     this.stopping = true;
   }
 
@@ -247,7 +252,7 @@ export class HolderIndexService implements OnModuleInit, OnApplicationShutdown {
   /** Chain head less confirmations, cached briefly: every progress read wants it. */
   async chainHead(): Promise<bigint> {
     if (this.head && Date.now() - this.head.at < 5_000) return this.head.block;
-    const block = (await this.chain.client.getBlockNumber()) - CONFIRMATIONS;
+    const block = (await this.chain.latestBlock()) - CONFIRMATIONS;
     this.head = { block, at: Date.now() };
     return block;
   }
@@ -357,7 +362,7 @@ export class HolderIndexService implements OnModuleInit, OnApplicationShutdown {
         span,
         shouldStop: () => this.stopping,
         fetch: (a, b) =>
-          this.chain.client.getLogs({
+          this.chain.backgroundClient.getLogs({
             address: getAddress(token) as Address,
             event: TRANSFER_EVENT,
             fromBlock: a,
@@ -531,7 +536,7 @@ export class HolderIndexService implements OnModuleInit, OnApplicationShutdown {
       span: 20_000n,
       shouldStop: () => this.stopping,
       fetch: (a, b) =>
-        this.chain.client.getLogs({
+        this.chain.backgroundClient.getLogs({
           address: batch.map((t) => getAddress(t.token) as Address),
           event: TRANSFER_EVENT,
           fromBlock: a,

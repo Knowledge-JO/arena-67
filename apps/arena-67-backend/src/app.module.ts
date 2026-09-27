@@ -17,6 +17,7 @@ import { AgentModule } from './agent/agent.module';
 import { OpenServModule } from './openserv/openserv.module';
 import { ResearchModule } from './research/research.module';
 import { HoldersModule } from './holders/holders.module';
+import { SandboxModule } from './sandbox/sandbox.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { HoldersModule } from './holders/holders.module';
     MailModule,
     ChainModule,
     AuthModule,
+    SandboxModule,
     AccountsModule,
     MemoryModule,
     MarketModule,

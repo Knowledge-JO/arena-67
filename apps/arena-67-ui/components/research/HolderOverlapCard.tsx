@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import type { HolderOverlap } from '@/lib/types';
 import { AddressChip, asOf, pctOfSupply, useHolderProgress } from './shared';
+import { CardNote } from '../chat/CardNote';
 
 const INITIAL_ROWS = 8;
 
@@ -22,7 +23,10 @@ export function HolderOverlapCard({
   data: initial,
   onAsk,
   disabled,
+  note,
 }: {
+  /** The agent's comment, shown inside the card. */
+  note?: string;
   data: HolderOverlap;
   onAsk: (text: string) => void;
   disabled?: boolean;
@@ -143,6 +147,7 @@ export function HolderOverlapCard({
         )}
         {error && <p className="mt-2 text-[11px] text-negative">{error}</p>}
       </header>
+      <CardNote text={note} />
 
       {compared.length < 2 ? (
         <p className="border-t border-border-base px-4 py-4 text-sm text-fg-muted">

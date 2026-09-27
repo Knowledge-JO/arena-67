@@ -54,7 +54,7 @@ export class MarketService {
   private readonly inflight = new Map<string, Promise<TokenMarket | null>>();
   /** Every Robinhood pair for a token, any DEX. Shared by the trade view and the report. */
   private readonly pairCache = new Map<string, { at: number; pairs: DexPair[] }>();
-  private readonly pairInflight = new Map<string, Promise<DexPair[]>>();
+  private readonly pairInflight = new Map<string, Promise<{ pairs: DexPair[]; fresh: boolean }>>();
 
   constructor(private readonly index: PoolIndexService) {}
 
@@ -78,8 +78,11 @@ export class MarketService {
     if (existing) return existing;
 
     const work = this.load(getAddress(address))
-      .then((value) => {
-        this.cache.set(key, { at: Date.now(), value });
+      .then(({ value, fresh }) => {
+        // A view built while Dexscreener was unreachable is served but not
+        // cached, so the next request tries again instead of repeating
+        // "no market" for a full cache window.
+        if (fresh) this.cache.set(key, { at: Date.now(), value });
         return value;
       })
       .finally(() => this.inflight.delete(key));
@@ -88,9 +91,12 @@ export class MarketService {
     return work;
   }
 
-  private async load(address: `0x${string}`): Promise<TokenMarket | null> {
-    const all = await this.allPairs(address);
+  private async load(address: `0x${string}`): Promise<{ value: TokenMarket | null; fresh: boolean }> {
+    const { pairs: all, fresh } = await this.pairsWithStatus(address);
+    return { value: this.viewFrom(address, all), fresh };
+  }
 
+  private viewFrom(address: `0x${string}`, all: DexPair[]): TokenMarket | null {
     if (all.length === 0) {
       // Fresh mints are routinely absent upstream. Fall back to whatever the
       // on-chain index has seen, flagged so the UI can say it is partial.
@@ -124,36 +130,48 @@ export class MarketService {
    * Cached with the same window as the market view, and never throws.
    */
   async allPairs(address: string): Promise<DexPair[]> {
-    if (!isAddress(address)) return [];
+    return (await this.pairsWithStatus(address)).pairs;
+  }
+
+  /**
+   * Pairs, and whether they are a fresh answer. When Dexscreener cannot be
+   * reached, the last good answer is served — however old — rather than an
+   * empty list, which every caller would read as "no exchange lists this
+   * token". Nothing is cached from a failure, so the next call retries.
+   */
+  private async pairsWithStatus(address: string): Promise<{ pairs: DexPair[]; fresh: boolean }> {
+    if (!isAddress(address)) return { pairs: [], fresh: true };
     const key = address.toLowerCase();
     const hit = this.pairCache.get(key);
-    if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.pairs;
+    if (hit && Date.now() - hit.at < CACHE_TTL_MS) return { pairs: hit.pairs, fresh: true };
 
     const existing = this.pairInflight.get(key);
     if (existing) return existing;
 
     const work = this.fetchPairs(getAddress(address))
       .then((pairs) => {
+        if (pairs === null) return { pairs: hit?.pairs ?? [], fresh: false };
         this.pairCache.set(key, { at: Date.now(), pairs });
-        return pairs;
+        return { pairs, fresh: true };
       })
       .finally(() => this.pairInflight.delete(key));
     this.pairInflight.set(key, work);
     return work;
   }
 
-  private async fetchPairs(address: `0x${string}`): Promise<DexPair[]> {
+  /** Null when no answer could be had — distinct from a real "no pairs". */
+  private async fetchPairs(address: `0x${string}`): Promise<DexPair[] | null> {
     // One retry. Connections to this host fail intermittently at the transport
     // layer (ENETUNREACH on v6, connect timeouts on v4) often enough that a
     // single blip would otherwise drop a token to its chain-only view for a
     // full cache window.
     const raw = await this.fetchJson(`${ENDPOINT}/${address}`, 2);
-    if (raw === null) return [];
+    if (raw === null) return null;
 
     const parsed = DexTokenResponse.safeParse(raw);
     if (!parsed.success) {
       this.log.warn(`dexscreener payload did not parse for ${address}`);
-      return [];
+      return null;
     }
     return (parsed.data.pairs ?? []).filter((p) => p.chainId === CHAIN_ID);
   }

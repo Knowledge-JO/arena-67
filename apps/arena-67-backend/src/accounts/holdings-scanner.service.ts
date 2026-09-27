@@ -58,7 +58,7 @@ export class HoldingsScannerService implements OnModuleInit {
    * transfers to wallets that did not exist yet. */
   private async initCursor(): Promise<boolean> {
     if ((await this.cursor()) !== null) return true;
-    const head = await this.chain.client.getBlockNumber();
+    const head = await this.chain.latestBlock();
     await this.setCursor(head);
     this.log.log(`holdings cursor initialised at block ${head}`);
     return true;
@@ -80,8 +80,8 @@ export class HoldingsScannerService implements OnModuleInit {
 
   /** Scans from the cursor to head. Safe to call directly, e.g. before a portfolio read. */
   async scan(): Promise<void> {
-    const from = (await this.cursor()) ?? (await this.chain.client.getBlockNumber());
-    const head = await this.chain.client.getBlockNumber();
+    const from = (await this.cursor()) ?? (await this.chain.latestBlock());
+    const head = await this.chain.latestBlock();
     if (head <= from) return;
 
     const addresses = (
@@ -98,7 +98,7 @@ export class HoldingsScannerService implements OnModuleInit {
 
       for (let i = 0; i < addresses.length; i += ADDRESSES_PER_QUERY) {
         const batch = addresses.slice(i, i + ADDRESSES_PER_QUERY);
-        const logs = await this.chain.client.getLogs({
+        const logs = await this.chain.backgroundClient.getLogs({
           event: TRANSFER,
           args: { to: batch },
           fromBlock: start,

@@ -3,6 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import { McpClientService, type McpSession } from './mcp-client.service';
 import { ConversationService } from '../memory/conversation.service';
 import { AuthService } from '../auth/auth.service';
+import { SandboxService, type TradingMode } from '../sandbox/sandbox.service';
+import { historyForModel, type StoredTurn } from './history';
 import {
   ReasoningService,
   type ChatMessage,
@@ -90,7 +92,15 @@ Rules:
   number the swap enforces on-chain.
 - You cannot sign. Trades are confirmed by the user in the app. Never claim a
   trade executed.
+- Percentages, "all", "max", "half" are sizes, not missing information. Pass
+  them as \`percent\` (100 for all, 50 for half) to prepare_trade or
+  get_quote — never ask for a token count instead, and never convert a
+  percentage into an amount yourself: the backend uses the exact balance.
+  For a sell the percentage is of the token held; for a buy, of the asset
+  being spent (e.g. "buy with half my USDG").
 - Be brief. Traders are reading fast. Lead with the answer.
+- Never write tables. The chat cannot draw them, and every table you would
+  write is already a card on the user's screen.
 
 The desk draws cards for you. When a tool result has a "kind" field, the user
 is already seeing it as a card with the addresses, prices and market caps laid
@@ -126,10 +136,26 @@ you never need or supply a user id.
 
 Two kinds of memory, and they are not interchangeable:
 - "what did I buy / sell" → get_trade_history. It is exact.
-- "what do I hold" → get_portfolio. It is read live from the chain.
+- "what do I hold" / "show my portfolio" / balance / profit → get_portfolio,
+  EVERY time — even if you showed it a moment ago. Balances and prices change
+  constantly; earlier messages are out of date. Never answer these from the
+  conversation, and never say "no change since last check".
 - "that token we discussed" / "what did I say about X" → recall_memory. It is
   approximate recollection of past conversations; present it that way.
 Never answer a holdings or trade question from recalled conversation.`;
+
+/** What the model must know about the mode, stated fresh every turn. */
+function modeNote(mode: TradingMode): string {
+  return mode === 'sandbox'
+    ? `MODE: SANDBOX. The user is paper trading. Trades fill at real mainnet
+prices but spend paper funds — nothing real moves. Call their balances and
+trades "paper" or "sandbox". If they have no paper funds, offer to add some
+(add_paper_funds). You cannot switch modes: if they want to trade real money,
+tell them to use the Sandbox/Live switch at the top of the app.`
+    : `MODE: LIVE. Trades spend real funds from the user's own wallet. Be
+explicit that a trade uses real money. You cannot switch modes: if they want to
+practise, tell them to use the Sandbox/Live switch at the top of the app.`;
+}
 
 @Injectable()
 export class AgentService {
@@ -141,6 +167,7 @@ export class AgentService {
     private readonly config: ConfigService,
     private readonly conversations: ConversationService,
     private readonly auth: AuthService,
+    private readonly sandbox: SandboxService,
   ) {}
 
   /**
@@ -175,11 +202,13 @@ export class AgentService {
     });
 
     const token = await this.auth.mintMcpToken(userId);
+    // Read per turn: the switch can flip between messages.
+    const mode = await this.sandbox.mode(userId).catch(() => 'sandbox' as const);
 
     let turn: AgentTurn;
     try {
       turn = await this.mcp.withUserSession(token, (session) =>
-        this.loop(session, conversationId, history, userMessage, signal, onToolCall),
+        this.loop(session, conversationId, history, userMessage, mode, signal, onToolCall),
       );
     } catch (err) {
       // Fail closed. A model handed no tools does not say it cannot help — in
@@ -191,10 +220,19 @@ export class AgentService {
       // the research tools for every failure, including the model itself
       // being unreachable, and quoted a port number at people who trade.
       const modelDown = /^SERV\b/.test(message);
+      // Out of credits is not an outage: retrying will not help, and whoever
+      // runs the app needs to know to top up. Said plainly, and logged loudly.
+      const outOfCredits = /^SERV 402\b/.test(message);
+      if (outOfCredits) {
+        this.log.error('OpenServ account is out of credits — every chat turn will fail until it is topped up.');
+      }
       turn = {
-        reply: modelDown
-          ? 'I can’t reach my AI service right now, so I won’t guess. Please try again in a moment.'
-          : 'I can’t reach my research tools right now, so I won’t guess. Please try again in a moment.',
+        reply: outOfCredits
+          ? 'I’m unavailable right now — the AI service this app uses has run out of credits. ' +
+            'Your wallet button at the top still shows your portfolio; chat will be back once the account is topped up.'
+          : modelDown
+            ? 'I can’t reach my AI service right now, so I won’t guess. Please try again in a moment.'
+            : 'I can’t reach my research tools right now, so I won’t guess. Please try again in a moment.',
         toolsUsed: [],
         truncated: false,
         rounds: 0,
@@ -217,8 +255,9 @@ export class AgentService {
   private async loop(
     session: McpSession,
     conversationId: string,
-    history: Array<{ role: 'user' | 'assistant'; content: string }>,
+    history: StoredTurn[],
     userMessage: string,
+    mode: TradingMode,
     signal?: AbortSignal,
     onToolCall?: ToolCallListener,
   ): Promise<AgentTurn> {
@@ -235,9 +274,10 @@ export class AgentService {
         // The conversation id lets recall_memory exclude the current thread.
         // Passing a different one leaks nothing: recall is filtered by the
         // token's user in the query itself, so the id only ever narrows.
-        content: `${SYSTEM_PROMPT}\n\nCurrent conversation id: ${conversationId}`,
+        content: `${SYSTEM_PROMPT}\n\n${modeNote(mode)}\n\nCurrent conversation id: ${conversationId}`,
       },
-      ...history.map((m) => ({ role: m.role, content: m.content }) as ChatMessage),
+      // Cleaned: no tables to copy or reuse, and card turns marked stale.
+      ...historyForModel(history).map((m) => ({ role: m.role, content: m.content }) as ChatMessage),
       { role: 'user', content: userMessage },
     ];
 
@@ -422,6 +462,45 @@ export class AgentService {
               'overlap, the most notable one, and which tokens were not compared ' +
               'yet. If there are no overlaps among the compared tokens, say that ' +
               'plainly and name which tokens it covered.',
+      });
+    }
+
+    if (step.kind === 'portfolio') {
+      // Totals and the few biggest positions: enough to say something useful,
+      // not rows to recite. Handed the full holdings list, the model wrote it
+      // out as a markdown table above the card that already shows it.
+      const p = step as {
+        mode?: string;
+        totalUsd: number;
+        netDepositsUsd?: number;
+        totalReturnUsd?: number;
+        totalReturnPct?: number | null;
+        realizedUsd?: number;
+        unpricedCount: number;
+        holdings: Array<{ symbol: string; valueUsd: number | null; pnlUsd?: number | null; pnlPct?: number | null }>;
+      };
+      return JSON.stringify({
+        mode: p.mode ?? 'live',
+        totalUsd: p.totalUsd,
+        netDepositsUsd: p.netDepositsUsd,
+        totalReturnUsd: p.totalReturnUsd,
+        totalReturnPct: p.totalReturnPct,
+        realizedUsd: p.realizedUsd,
+        unrealizedUsd: (p as { unrealizedUsd?: number }).unrealizedUsd,
+        feesUsd: (p as { feesUsd?: number }).feesUsd,
+        cashUsd: (p as { cashUsd?: number }).cashUsd,
+        holdingCount: p.holdings.length,
+        unpricedCount: p.unpricedCount,
+        largest: p.holdings.slice(0, 3).map((h) => ({
+          symbol: h.symbol,
+          valueUsd: h.valueUsd,
+          pnlUsd: h.pnlUsd ?? null,
+          pnlPct: h.pnlPct ?? null,
+        })),
+        instruction:
+          `${shown} The card is the whole answer and your text is not displayed ` +
+          'with it. Reply with one short sentence at most — no table, no list, ' +
+          'no balances, no questions.',
       });
     }
 

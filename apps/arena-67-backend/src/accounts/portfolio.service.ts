@@ -3,6 +3,7 @@ import { formatUnits, getAddress } from 'viem';
 import { ChainService } from '../chain/chain.service';
 import { NATIVE_TOKEN } from '../chain/networks';
 import { MarketService } from '../market/market.service';
+import { LivePriceService } from '../market/live-price.service';
 import { ERC20_ABI } from '../trading/uniswap-v4.abi';
 import { UserWalletService } from './user-wallet.service';
 import { HoldingsScannerService } from './holdings-scanner.service';
@@ -46,6 +47,7 @@ export class PortfolioService {
   constructor(
     private readonly chain: ChainService,
     private readonly market: MarketService,
+    private readonly livePrice: LivePriceService,
     private readonly wallets: UserWalletService,
     private readonly scanner: HoldingsScannerService,
     private readonly ledger: TradeLedgerService,
@@ -114,8 +116,12 @@ export class PortfolioService {
       // Priced in parallel; one token with no market must not blank the rest.
       const priced = await Promise.all(
         held.map(async (h) => {
-          const m = await this.market.forToken(h.token).catch(() => null);
-          const priceUsd = m?.stats?.priceUsd ?? null;
+          const [m, live] = await Promise.all([
+            this.market.forToken(h.token).catch(() => null),
+            this.livePrice.live(h.token).catch(() => null),
+          ]);
+          // The pool's price this block where there is one: a live card polls this.
+          const priceUsd = live?.priceUsd ?? m?.stats?.priceUsd ?? null;
           const amount = Number(formatUnits(h.raw, h.decimals));
           return {
             address: h.token,

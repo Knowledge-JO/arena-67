@@ -16,6 +16,7 @@ import { CODE_LENGTH } from '../auth/auth.constants';
 import { UserWalletService } from './user-wallet.service';
 import { PortfolioService } from './portfolio.service';
 import { TradeLedgerService } from './trade-ledger.service';
+import { SandboxService } from '../sandbox/sandbox.service';
 
 const ExportBody = z.object({
   code: z.string().trim().regex(new RegExp(`^\\d{${CODE_LENGTH}}$`), 'Enter the 6-digit code'),
@@ -29,6 +30,7 @@ export class AccountsController {
     private readonly portfolio: PortfolioService,
     private readonly ledger: TradeLedgerService,
     private readonly auth: AuthService,
+    private readonly sandbox: SandboxService,
   ) {}
 
   /** Cheap: what the balance box in the chat header polls. */
@@ -38,15 +40,18 @@ export class AccountsController {
     return { address, eth };
   }
 
+  /** The portfolio for the mode the user is in: paper in sandbox, the wallet in live. */
   @Get('portfolio')
-  portfolioOf(@CurrentUser() user: AuthedUser) {
-    return this.portfolio.forUser(user.id);
+  async portfolioOf(@CurrentUser() user: AuthedUser) {
+    if ((await this.sandbox.mode(user.id)) === 'sandbox') return this.sandbox.portfolio(user.id);
+    return { ...(await this.portfolio.forUser(user.id)), mode: 'live' as const };
   }
 
   @Get('trades')
   async trades(@CurrentUser() user: AuthedUser) {
+    if ((await this.sandbox.mode(user.id)) === 'sandbox') return this.sandbox.history(user.id, 50);
     const rows = await this.ledger.history(user.id, 50);
-    return rows.map((t) => ({ ...t, amountIn: t.amountIn, amountOut: t.amountOut }));
+    return rows.map((t) => ({ ...t, mode: 'live' as const, amountIn: t.amountIn, amountOut: t.amountOut }));
   }
 
   /** Step 1 of export: email a fresh code to the account's own inbox. */

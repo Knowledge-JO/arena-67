@@ -1,5 +1,17 @@
 /** Mirrors TradeStep in the backend's trading.service.ts. */
 
+/** Paper money on mainnet prices, or the user's real wallet. */
+export type TradingMode = 'sandbox' | 'live';
+
+export interface PaperFill {
+  spent: string;
+  received: string;
+  valueUsd: number;
+  feeUsd: number;
+  feeAsset: string;
+  realizedUsd: number | null;
+}
+
 export interface TokenCandidate {
   id: string;
   address: string;
@@ -136,6 +148,19 @@ export interface TokenReport {
   asOf: string;
 }
 
+/** Live figures for an open report card. Mirrors the backend's LiveMarket. */
+export interface LiveMarket {
+  address: string;
+  priceUsd: number | null;
+  marketCap: number | null;
+  priceChange24h: number | null;
+  /** 'chain' = read from the pool this instant; 'dexscreener' = up to 30s old. */
+  source: 'chain' | 'dexscreener';
+  pool: { quoteSymbol: string; liquidityUsd: number } | null;
+  market: TokenOverview | null;
+  at: string;
+}
+
 export interface VolumeToken {
   rank: number;
   address: string;
@@ -240,6 +265,10 @@ export type TradeStep =
       stats: TokenStats | null;
       pools: TokenPool[];
       selectedPoolId?: string;
+      /** Buying or selling: what the amount box is denominated in. Absent on old cards. */
+      action?: 'buy' | 'sell';
+      /** Once a venue is chosen: what is held of the asset being spent. */
+      available?: { amount: string; symbol: string } | null;
       /** True when there is no market data and pools came from chain state. */
       degraded: boolean;
       message: string;
@@ -250,13 +279,18 @@ export type TradeStep =
       quoteId: string;
       message: string;
       summary: Record<string, string>;
+      /** Absent on cards saved before the sandbox existed: those were live. */
+      mode?: TradingMode;
     }
   | {
       kind: 'executed';
       intentId: string;
-      txHash: string;
-      explorerUrl: string;
+      /** Live trades only; a paper fill has no transaction. */
+      txHash?: string;
+      explorerUrl?: string;
       message: string;
+      mode?: TradingMode;
+      paper?: PaperFill;
     }
   | { kind: 'rejected'; message: string };
 
@@ -277,6 +311,9 @@ export interface TrendingToken {
   priceUsd: number | null;
   priceChange24h: number | null;
   volume24h: number | null;
+  marketCap?: number | null;
+  /** When its first trading pool opened (epoch ms) — its launch, in practice. */
+  launchedAt?: number | null;
   imageUrl: string | null;
 }
 
@@ -302,6 +339,7 @@ export interface AgentReply {
 export interface Me {
   user: { id: string; email: string | null };
   wallet: { address: string };
+  mode: TradingMode;
 }
 
 export interface ConversationSummary {
@@ -328,15 +366,58 @@ export interface Holding {
   /** Null when unpriced — never zero, which would read as worthless. */
   valueUsd: number | null;
   imageUrl: string | null;
+  /** Sandbox only: what the holding cost, and its profit at today's price. */
+  costUsd?: number;
+  pnlUsd?: number | null;
+  pnlPct?: number | null;
+  /** Sandbox: cash (ETH, USDG) pays for trades; positions are what was bought. */
+  kind?: 'cash' | 'position';
+  /** Sandbox: average price paid per token. */
+  avgPriceUsd?: number | null;
+  /** Sandbox: profit already locked in on this asset by earlier sales. */
+  realizedUsd?: number;
+  /** Sandbox: share of the portfolio's value, 0–100. */
+  allocationPct?: number | null;
+}
+
+export interface ClosedPosition {
+  address: string;
+  symbol: string;
+  imageUrl: string | null;
+  realizedUsd: number;
+}
+
+export interface PortfolioActivity {
+  side: 'buy' | 'sell';
+  symbol: string;
+  address: string;
+  valueUsd: number | null;
+  realizedUsd: number | null;
+  at: string;
 }
 
 export interface Portfolio {
   kind: 'portfolio';
+  /** Absent on cards saved before the sandbox existed: those were live. */
+  mode?: TradingMode;
   address: string;
   totalUsd: number;
   unpricedCount: number;
   holdings: Holding[];
   asOf: string;
+  /** Sandbox only. Deposits are what profit is measured against. */
+  netDepositsUsd?: number;
+  totalReturnUsd?: number;
+  totalReturnPct?: number | null;
+  realizedUsd?: number;
+  unrealizedUsd?: number;
+  cashUsd?: number;
+  investedUsd?: number;
+  feesUsd?: number;
+  tradeCount?: number;
+  startedAt?: string;
+  closedPositions?: ClosedPosition[];
+  recentTrades?: PortfolioActivity[];
 }
 
 /** A turn in the transcript: what the user said, or what the desk replied. */
@@ -353,4 +434,6 @@ export type Entry =
     }
   /** A card with no prose — emitted when the user acts on a card directly. */
   | { id: string; role: 'card'; step: TradeStep }
-  | { id: string; role: 'error'; text: string };
+  | { id: string; role: 'error'; text: string }
+  /** A quiet line in the transcript, e.g. "Switched to Sandbox". */
+  | { id: string; role: 'notice'; text: string };

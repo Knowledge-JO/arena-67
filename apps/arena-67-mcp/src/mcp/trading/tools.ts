@@ -61,17 +61,27 @@ export function registerTradingTools(server: McpServer, api: AxiosInstance) {
         contractAddress: z.string().regex(EVM_ADDRESS).optional(),
         ticker: z.string().optional().describe('Only if no address is known.'),
         amount: z.number().positive().optional(),
+        percent: z
+          .number()
+          .positive()
+          .max(100)
+          .optional()
+          .describe(
+            'Size as a percentage of what the user holds of what they are spending ' +
+              '(the token on a sell, the funding asset on a buy). "all"/"max"/"100%" = 100, ' +
+              '"half" = 50. Use this instead of amount whenever they give a share.',
+          ),
         currency: z.string().optional(),
       },
     },
-    async ({ action, contractAddress, ticker, amount, currency }) => {
+    async ({ action, contractAddress, ticker, amount, percent, currency }) => {
       if (!contractAddress && !ticker) {
         return toolError(new Error('Give either contractAddress or ticker.'));
       }
       try {
         return toolSuccess(
           await beginTrade(api, {
-            intent: { action, contractAddress, ticker, amount, currency },
+            intent: { action, contractAddress, ticker, amount, percent, currency },
           }),
         );
       } catch (error) {
@@ -116,7 +126,24 @@ export function registerTradingTools(server: McpServer, api: AxiosInstance) {
         'confirm in the app; there is no tool here that spends funds.',
       inputSchema: {
         intentId: z.string().uuid(),
-        amount: z.number().positive().describe('Denominated in the pool\'s quote asset.'),
+        amount: z
+          .number()
+          .positive()
+          .optional()
+          .describe(
+            'For a buy: how much of the pool\'s other asset (e.g. USDG, ETH) to spend. ' +
+              'For a sell: how many of the token to sell.',
+          ),
+        percent: z
+          .number()
+          .positive()
+          .max(100)
+          .optional()
+          .describe(
+            'Instead of amount: a share of what the user holds of what they are ' +
+              'spending. "Sell 100%"/"all"/"max" = 100, "half" = 50. The backend ' +
+              'reads the exact balance — never work the amount out yourself.',
+          ),
       },
     },
     async (args) => {

@@ -164,7 +164,10 @@ function build() {
   const chain = {
     network: NETWORK,
     explorer: NETWORK.explorer,
-    client: { getBalance: jest.fn().mockResolvedValue(parseUnits('100', 18)) },
+    client: {
+      getBalance: jest.fn().mockResolvedValue(parseUnits('100', 18)),
+      getGasPrice: jest.fn().mockResolvedValue(1_000_000n),
+    },
   };
   const index = {
     poolsFor: jest.fn(),
@@ -172,6 +175,18 @@ function build() {
     resolveForToken: jest.fn().mockResolvedValue(POOL_RECORD),
   };
   const market = { forToken: jest.fn().mockResolvedValue(MARKET) };
+  // Live by default, so every test above the sandbox block exercises the
+  // real-wallet path exactly as before.
+  const sandbox = {
+    mode: jest.fn().mockResolvedValue('live'),
+    balanceOf: jest.fn().mockResolvedValue(parseUnits('1000000', 6)),
+    positions: jest.fn().mockResolvedValue(new Map([[NATIVE, { amount: parseUnits('1', 18) }]])),
+    key: (a: string) => (a.toLowerCase() === BASE_WETH.address.toLowerCase() ? NATIVE : a.toLowerCase()),
+    priceUsd: jest.fn().mockResolvedValue(1),
+    fill: jest.fn().mockResolvedValue({ tradeId: 'paper-1', realizedUsd: 0 }),
+  };
+  // No tax unless a test says otherwise.
+  const taxes = { measure: jest.fn().mockResolvedValue({ buyPct: 0, sellPct: 0 }) };
 
   const service = new TradingService(
     store,
@@ -184,9 +199,11 @@ function build() {
     index as unknown as PoolIndexService,
     market as unknown as import('../market/market.service').MarketService,
     ledger as unknown as TradeLedgerService,
+    sandbox as unknown as import('../sandbox/sandbox.service').SandboxService,
+    taxes as unknown as import('../chain/transfer-tax.service').TransferTaxService,
   );
 
-  return { store, quotes, swaps, tokens, wallet, chain, index, market, ledger, service };
+  return { store, quotes, swaps, tokens, wallet, chain, index, market, ledger, sandbox, taxes, service };
 }
 
 /**
@@ -506,5 +523,216 @@ describe('TradingService', () => {
 
     expect(rejected.kind).toBe('rejected');
     expect(rejected.message).toMatch(/reverted on-chain/);
+  });
+
+  describe('sandbox', () => {
+    /** Walks a sandbox buy to its confirm card. */
+    async function quotedPaperBuy(amount = 10) {
+      const t = build();
+      t.sandbox.mode.mockResolvedValue('sandbox');
+      t.tokens.describe.mockResolvedValue(TOKEN);
+      t.index.poolsFor.mockReturnValue([]);
+      t.quotes.quoteExactIn.mockResolvedValue(FIXED_QUOTE);
+      const begun = await t.service.begin('s1', intent({ amount, contractAddress: TOKEN.address }));
+      const quoted = await t.service.advance('s1', await pickVenue(t.service, 's1', begun));
+      return { ...t, quoted };
+    }
+
+    it('fills on paper and never reaches the signer', async () => {
+      const { service, quoted, wallet, swaps, sandbox, ledger } = await quotedPaperBuy();
+      if (quoted.kind !== 'confirm') throw new Error('expected confirm');
+      expect(quoted.mode).toBe('sandbox');
+
+      const done = await service.confirm('s1', quoted.intentId, quoted.quoteId);
+
+      if (done.kind !== 'executed') throw new Error(`expected executed, got ${done.message}`);
+      expect(done.mode).toBe('sandbox');
+      expect(done.txHash).toBeUndefined();
+      expect(wallet.withSigner).not.toHaveBeenCalled();
+      expect(swaps.execute).not.toHaveBeenCalled();
+      expect(ledger.open).not.toHaveBeenCalled();
+      expect(sandbox.fill).toHaveBeenCalledTimes(1);
+      const [, fill] = sandbox.fill.mock.calls[0];
+      expect(fill.amountIn).toBe(FIXED_QUOTE.amountIn);
+      expect(fill.fee.symbol).toBe('ETH');
+    });
+
+    it('re-prices at confirm and refuses a fill below the agreed minimum', async () => {
+      const { service, quoted, quotes, sandbox } = await quotedPaperBuy();
+      if (quoted.kind !== 'confirm') throw new Error('expected confirm');
+      quotes.quoteExactIn.mockResolvedValue({ ...FIXED_QUOTE, amountOut: FIXED_QUOTE.minAmountOut - 1n });
+
+      const r = await service.confirm('s1', quoted.intentId, quoted.quoteId);
+
+      expect(r.kind).toBe('rejected');
+      expect(r.message).toMatch(/slippage limit/);
+      expect(sandbox.fill).not.toHaveBeenCalled();
+    });
+
+    it('refuses a sandbox trade confirmed after switching to live — and never signs it', async () => {
+      const { service, quoted, sandbox, wallet, swaps } = await quotedPaperBuy();
+      if (quoted.kind !== 'confirm') throw new Error('expected confirm');
+      sandbox.mode.mockResolvedValue('live');
+
+      const r = await service.confirm('s1', quoted.intentId, quoted.quoteId);
+
+      expect(r.kind).toBe('rejected');
+      expect(r.message).toMatch(/switched to Live/);
+      expect(wallet.withSigner).not.toHaveBeenCalled();
+      expect(swaps.execute).not.toHaveBeenCalled();
+      expect(sandbox.fill).not.toHaveBeenCalled();
+    });
+
+    it('refuses a live trade confirmed after switching to sandbox', async () => {
+      const { service, tokens, index, quotes, sandbox, wallet } = build();
+      tokens.describe.mockResolvedValue(TOKEN);
+      index.poolsFor.mockReturnValue([]);
+      quotes.quoteExactIn.mockResolvedValue(FIXED_QUOTE);
+      const begun = await service.begin('s1', intent({ amount: 10, contractAddress: TOKEN.address }));
+      const quoted = await service.advance('s1', await pickVenue(service, 's1', begun));
+      if (quoted.kind !== 'confirm') throw new Error('expected confirm');
+      expect(quoted.mode).toBe('live');
+      sandbox.mode.mockResolvedValue('sandbox');
+
+      const r = await service.confirm('s1', quoted.intentId, quoted.quoteId);
+
+      expect(r.kind).toBe('rejected');
+      expect(wallet.withSigner).not.toHaveBeenCalled();
+      expect(sandbox.fill).not.toHaveBeenCalled();
+    });
+
+    it('fails closed when the mode cannot be read at confirm', async () => {
+      const { service, quoted, sandbox, wallet } = await quotedPaperBuy();
+      if (quoted.kind !== 'confirm') throw new Error('expected confirm');
+      sandbox.mode.mockRejectedValue(new Error('db down'));
+
+      const r = await service.confirm('s1', quoted.intentId, quoted.quoteId);
+
+      expect(r.kind).toBe('rejected');
+      expect(wallet.withSigner).not.toHaveBeenCalled();
+      expect(sandbox.fill).not.toHaveBeenCalled();
+    });
+
+    it('skips the real-money cap but checks the paper balance', async () => {
+      // $1,000 is far above the $25 live cap.
+      const big = await quotedPaperBuy(1000);
+      expect(big.quoted.kind).toBe('confirm');
+
+      const poor = build();
+      poor.sandbox.mode.mockResolvedValue('sandbox');
+      poor.sandbox.balanceOf.mockResolvedValue(parseUnits('5', 6));
+      poor.tokens.describe.mockResolvedValue(TOKEN);
+      poor.index.poolsFor.mockReturnValue([]);
+      poor.quotes.quoteExactIn.mockResolvedValue(FIXED_QUOTE);
+      const begun = await poor.service.begin('s1', intent({ amount: 10, contractAddress: TOKEN.address }));
+      const step = await poor.service.advance('s1', await pickVenue(poor.service, 's1', begun));
+      expect(step.kind).toBe('rejected');
+      expect(step.message).toMatch(/Your sandbox holds 5/);
+    });
+
+    it('applies a measured transfer tax to the quote and to the paper fill', async () => {
+      const t = build();
+      t.sandbox.mode.mockResolvedValue('sandbox');
+      t.taxes.measure.mockResolvedValue({ buyPct: 5, sellPct: 5 });
+      t.tokens.describe.mockResolvedValue(TOKEN);
+      t.index.poolsFor.mockReturnValue([]);
+      t.quotes.quoteExactIn.mockResolvedValue(FIXED_QUOTE);
+      const begun = await t.service.begin('s1', intent({ amount: 10, contractAddress: TOKEN.address }));
+      const quoted = await t.service.advance('s1', await pickVenue(t.service, 's1', begun));
+      if (quoted.kind !== 'confirm') throw new Error('expected confirm');
+
+      expect(quoted.summary.transferTax).toMatch(/5% on buys/);
+      // 9,990,000 base units less 5%, in 18 decimals.
+      expect(quoted.summary.receive).toBe('~0.0000000000094905 ANIME');
+      expect(quoted.summary.networkFee).toMatch(/paper ETH/);
+
+      await t.service.confirm('s1', quoted.intentId, quoted.quoteId);
+      const [, fill] = t.sandbox.fill.mock.calls[0];
+      expect(fill.amountOut).toBe((FIXED_QUOTE.amountOut * 95n) / 100n);
+    });
+
+    it('says a tax could not be checked rather than implying there is none', async () => {
+      const t = build();
+      t.sandbox.mode.mockResolvedValue('sandbox');
+      t.taxes.measure.mockResolvedValue(null);
+      t.tokens.describe.mockResolvedValue(TOKEN);
+      t.index.poolsFor.mockReturnValue([]);
+      t.quotes.quoteExactIn.mockResolvedValue(FIXED_QUOTE);
+      const begun = await t.service.begin('s1', intent({ amount: 10, contractAddress: TOKEN.address }));
+      const quoted = await t.service.advance('s1', await pickVenue(t.service, 's1', begun));
+      if (quoted.kind !== 'confirm') throw new Error('expected confirm');
+      expect(quoted.summary.transferTax).toMatch(/Could not be checked/);
+    });
+
+    it('charges the network fee in USDG when the sandbox holds no ETH', async () => {
+      const { service, quoted, sandbox } = await quotedPaperBuy();
+      if (quoted.kind !== 'confirm') throw new Error('expected confirm');
+      sandbox.positions.mockResolvedValue(new Map());
+
+      await service.confirm('s1', quoted.intentId, quoted.quoteId);
+
+      const [, fill] = sandbox.fill.mock.calls[0];
+      expect(fill.fee.symbol).toBe('USDG');
+      expect(fill.fee.units).toBeGreaterThan(0n);
+    });
+  });
+
+  describe('percentages', () => {
+    // An 18-decimal balance a JS number cannot hold exactly.
+    const HELD = 11_789_473_856760000000000001n;
+
+    function sandboxSell(held: bigint) {
+      const t = build();
+      t.sandbox.mode.mockResolvedValue('sandbox');
+      t.sandbox.balanceOf.mockResolvedValue(held);
+      t.tokens.describe.mockResolvedValue(TOKEN);
+      t.index.poolsFor.mockReturnValue([]);
+      t.quotes.quoteExactIn.mockResolvedValue(FIXED_QUOTE);
+      return t;
+    }
+
+    it('sells exactly the whole balance for 100%, to the last unit', async () => {
+      const t = sandboxSell(HELD);
+      const begun = await t.service.begin('s1', intent({ action: 'sell', percent: 100, contractAddress: TOKEN.address }));
+      const quoted = await t.service.advance('s1', await pickVenue(t.service, 's1', begun));
+
+      if (quoted.kind !== 'confirm') throw new Error(`expected confirm, got ${quoted.kind}: ${quoted.message}`);
+      expect(t.quotes.quoteExactIn.mock.calls[0][0].amountIn).toBe(HELD);
+      expect(quoted.summary.spend).toMatch(/100% of what you hold/);
+    });
+
+    it('sells precisely half for 50%', async () => {
+      const t = sandboxSell(HELD);
+      const begun = await t.service.begin('s1', intent({ action: 'sell', percent: 50, contractAddress: TOKEN.address }));
+      await t.service.advance('s1', await pickVenue(t.service, 's1', begun));
+      expect(t.quotes.quoteExactIn.mock.calls[0][0].amountIn).toBe(HELD / 2n);
+    });
+
+    it('takes a percentage given after the pool is picked, and shows what is available', async () => {
+      const t = sandboxSell(HELD);
+      const begun = await t.service.begin('s1', intent({ action: 'sell', contractAddress: TOKEN.address }));
+      const page = await t.service.selectPool('s1', (begun as { intentId: string }).intentId, POOL_ID);
+      if (page.kind !== 'token_detail') throw new Error('expected token page');
+      expect(page.action).toBe('sell');
+      expect(page.available?.symbol).toBe(TOKEN.symbol);
+
+      const quoted = await t.service.setPercent('s1', page.intentId, 100);
+      expect(quoted.kind).toBe('confirm');
+      expect(t.quotes.quoteExactIn.mock.calls[0][0].amountIn).toBe(HELD);
+    });
+
+    it('says so plainly when there is nothing to sell', async () => {
+      const t = sandboxSell(0n);
+      const begun = await t.service.begin('s1', intent({ action: 'sell', percent: 100, contractAddress: TOKEN.address }));
+      const step = await t.service.advance('s1', await pickVenue(t.service, 's1', begun));
+      expect(step.kind).toBe('rejected');
+      expect(step.message).toMatch(/You have no ANIME to sell in your sandbox/);
+    });
+
+    it('refuses a percentage outside 1–100', async () => {
+      const t = sandboxSell(HELD);
+      const r = await t.service.setPercent('s1', 'whatever', 150);
+      expect(r.kind).toBe('rejected');
+    });
   });
 });

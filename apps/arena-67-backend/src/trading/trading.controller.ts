@@ -31,7 +31,13 @@ function parse<T extends z.ZodTypeAny>(schema: T, body: unknown): z.infer<T> {
 // verified token says it is, and nothing the client sends can change that.
 const BeginBody = z.object({ intent: TradeIntentSchema });
 const SelectBody = z.object({ intentId: z.string().uuid(), candidateId: z.string().uuid() });
-const AmountBody = z.object({ intentId: z.string().uuid(), amount: z.number().positive() });
+const AmountBody = z
+  .object({
+    intentId: z.string().uuid(),
+    amount: z.number().positive().optional(),
+    percent: z.number().positive().max(100).optional(),
+  })
+  .refine((b) => (b.amount == null) !== (b.percent == null), 'Give either an amount or a percent');
 const ConfirmBody = z.object({ intentId: z.string().uuid(), quoteId: z.string().uuid() });
 const SelectPoolBody = z.object({
   intentId: z.string().uuid(),
@@ -71,8 +77,10 @@ export class TradingController {
   @Post('amount')
   @HttpCode(200)
   amount(@CurrentUser() user: AuthedUser, @Body() body: unknown): Promise<TradeStep> {
-    const { intentId, amount } = parse(AmountBody, body);
-    return this.trading.setAmount(user.id, intentId, amount);
+    const { intentId, amount, percent } = parse(AmountBody, body);
+    return percent != null
+      ? this.trading.setPercent(user.id, intentId, percent)
+      : this.trading.setAmount(user.id, intentId, amount!);
   }
 
   @Post('select-pool')
