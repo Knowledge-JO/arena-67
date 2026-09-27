@@ -29,6 +29,8 @@ export interface TokenMeta {
 }
 
 const CHUNK = 100_000n;
+/** Contracts a single cold search may hydrate before answering. */
+const SEARCH_HYDRATE_LIMIT = 100;
 
 /**
  * An index of live Uniswap v4 pools, built by replaying the PoolManager's
@@ -71,17 +73,39 @@ export class PoolIndexService implements OnModuleInit {
     private readonly config: ConfigService,
   ) {}
 
-  async onModuleInit(): Promise<void> {
-    const head = await this.chain.client.getBlockNumber();
+  onModuleInit(): void {
+    void this.start();
+  }
+
+  /**
+   * Starts the backfill. Nothing awaits it — boot does not wait on the pool
+   * index, and a failed head read is retried here rather than failing the
+   * whole server's startup, which it used to.
+   */
+  private async start(attempt = 1): Promise<void> {
+    let head: bigint;
+    try {
+      head = await this.chain.client.getBlockNumber();
+    } catch (e) {
+      const wait = Math.min(60, 5 * attempt);
+      this.log.warn(`pool index cannot read the chain head yet, retrying in ${wait}s: ${(e as Error).message.split('\n')[0]}`);
+      setTimeout(() => void this.start(attempt + 1), wait * 1_000);
+      return;
+    }
     const span = BigInt(this.config.get<number>('POOL_INDEX_SPAN') ?? 200_000);
     // Backfill runs unawaited: a cold index should not hold up the API, and
     // every read path already copes with an index that is still filling.
     void this.scan(head - span, head)
-      .then(() => {
+      .then(async () => {
         this.ready = true;
         this.log.log(
           `pool index ready — ${this.pools.size} pools, ${this.byToken.size} tokens`,
         );
+        // Warm the metadata cache in the background. Without this the first
+        // search of a session pays to hydrate every indexed token — a thousand
+        // contracts over ten multicalls — and times out before answering.
+        await this.hydrate([...this.byToken.keys()] as Address[]);
+        this.log.log(`metadata warm — ${this.meta.size} tokens hydrated`);
       })
       .catch((e) => this.log.error(`initial pool scan failed: ${e.message}`));
   }
@@ -271,7 +295,15 @@ export class PoolIndexService implements OnModuleInit {
   async search(query: string, limit = 8): Promise<TokenMeta[]> {
     const q = query.trim().toLowerCase();
     if (!q) return [];
-    await this.hydrate([...this.byToken.keys()] as Address[]);
+
+    // Hydrate at most one batch per call. The boot warm-up normally means
+    // there is nothing left to do; this only matters if a search lands while
+    // the cache is still filling, and there it keeps the call bounded instead
+    // of letting it inherit the whole backlog.
+    const cold = [...this.byToken.keys()].filter(
+      (a) => !this.meta.has(a),
+    ) as Address[];
+    if (cold.length) await this.hydrate(cold.slice(0, SEARCH_HYDRATE_LIMIT));
 
     const scored: Array<{ m: TokenMeta; score: number }> = [];
     for (const m of this.meta.values()) {
@@ -291,10 +323,22 @@ export class PoolIndexService implements OnModuleInit {
       .map((s) => s.m);
   }
 
-  /** Tokens with the most pools opened against them. Feeds the arena panel. */
+  /**
+   * Tokens with the most pools opened against them. Feeds the arena panel.
+   *
+   * Base assets are excluded, not just native ETH. WETH and USDG sit on one
+   * side of almost every pool by definition, so ranking by pool count put them
+   * permanently in the top two rows of a list nobody opens in order to buy
+   * dollars. They are the denominator, not the thing being traded.
+   */
   async hottest(limit = 12): Promise<TokenMeta[]> {
+    const excluded = new Set<string>([NATIVE_TOKEN.toLowerCase()]);
+    for (const base of Object.values(this.chain.network.baseTokens)) {
+      excluded.add(base.address.toLowerCase());
+    }
+
     const ranked = [...this.byToken.entries()]
-      .filter(([addr]) => addr !== NATIVE_TOKEN.toLowerCase())
+      .filter(([addr]) => !excluded.has(addr))
       .sort((a, b) => b[1].size - a[1].size)
       .slice(0, limit * 2)
       .map(([addr]) => addr as Address);

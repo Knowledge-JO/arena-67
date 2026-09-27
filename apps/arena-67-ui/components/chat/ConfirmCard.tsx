@@ -2,6 +2,7 @@
 
 import { motion } from 'motion/react';
 import { useEffect, useState } from 'react';
+import { RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /** Matches QUOTE_TTL_MS in the backend's pending-intent.store.ts. */
@@ -22,13 +23,18 @@ const QUOTE_TTL_MS = 30_000;
 export function ConfirmCard({
   summary,
   onConfirm,
+  onRequote,
   disabled,
   spent,
+  repricing,
 }: {
   summary: Record<string, string>;
   onConfirm: () => void;
+  /** Fetches a fresh price for the same venue. */
+  onRequote: () => void;
   disabled?: boolean;
   spent?: boolean;
+  repricing?: boolean;
 }) {
   const [remaining, setRemaining] = useState(QUOTE_TTL_MS);
 
@@ -51,6 +57,7 @@ export function ConfirmCard({
     'action',
     'token',
     'contract',
+    'venue',
     'spend',
     'receive',
     'guaranteedMinimum',
@@ -110,24 +117,46 @@ export function ConfirmCard({
                 stale ? 'text-negative' : 'text-fg-subtle',
               )}
             >
-              {stale ? 'quote expired' : `${seconds}s`}
+              {stale ? 'price expired' : `${seconds}s`}
             </span>
           </div>
         )}
 
-        <button
-          type="button"
-          onClick={onConfirm}
-          disabled={disabled || stale || spent}
-          className={cn(
-            'ml-auto rounded-lg px-4 py-2 text-sm font-medium transition-colors',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60',
-            'bg-accent text-accent-fg hover:opacity-90',
-            'disabled:cursor-not-allowed disabled:opacity-40',
-          )}
-        >
-          {spent ? 'Confirmed' : stale ? 'Expired' : 'Confirm & sign'}
-        </button>
+        {/*
+          An expired quote is recoverable, not a dead end. The numbers above
+          stay on screen while re-pricing so the card keeps its height and the
+          user can see what changed.
+        */}
+        {stale && !spent ? (
+          <button
+            type="button"
+            onClick={onRequote}
+            disabled={disabled || repricing}
+            className={cn(
+              'ml-auto inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-colors',
+              'border border-border-strong text-fg hover:bg-surface',
+              'disabled:cursor-not-allowed disabled:opacity-50',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60',
+            )}
+          >
+            <RefreshCw size={13} className={repricing ? 'animate-spin' : undefined} />
+            {repricing ? 'Re-pricing…' : 'Get fresh quote'}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={disabled || spent}
+            className={cn(
+              'ml-auto rounded-lg px-4 py-2 text-sm font-medium transition-colors',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60',
+              'bg-accent text-accent-fg hover:opacity-90',
+              'disabled:cursor-not-allowed disabled:opacity-40',
+            )}
+          >
+            {spent ? 'Confirmed' : 'Confirm & sign'}
+          </button>
+        )}
       </div>
     </motion.div>
   );

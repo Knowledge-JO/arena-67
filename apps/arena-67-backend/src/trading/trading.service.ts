@@ -5,7 +5,8 @@ import { PendingIntentStore, type PendingIntent } from './pending-intent.store';
 import { QuoteService } from './quote.service';
 import { SwapService } from './swap.service';
 import { TokensService } from './tokens.service';
-import { WalletService } from '../wallet/wallet.service';
+import { UserWalletService } from '../accounts/user-wallet.service';
+import { TradeLedgerService } from '../accounts/trade-ledger.service';
 import { NATIVE_TOKEN, explorerTxUrl, type BaseToken } from '../chain/networks';
 import { ChainService } from '../chain/chain.service';
 import { PoolIndexService, type PoolRecord } from '../chain/pool-index.service';
@@ -74,11 +75,12 @@ export class TradingService {
     private readonly quotes: QuoteService,
     private readonly swaps: SwapService,
     private readonly tokens: TokensService,
-    private readonly wallet: WalletService,
+    private readonly wallet: UserWalletService,
     private readonly config: ConfigService,
     private readonly chain: ChainService,
     private readonly index: PoolIndexService,
     private readonly market: MarketService,
+    private readonly ledger: TradeLedgerService,
   ) {}
 
   /** Entry point for a fresh trade intent extracted by the OpenServ runtime. */
@@ -295,20 +297,22 @@ export class TradingService {
       }
     }
 
-    // Check the balance of whatever is actually being spent, funding asset
-    // included — a buy fails just as hard with no USDG as a sell does with no
-    // tokens, and finding that out after signing wastes gas. Skipped without a
-    // signer: there is no wallet to weigh, and a quote is still worth showing.
-    if (tokenIn !== NATIVE_TOKEN && this.wallet.available) {
+    // Check the balance of whatever is actually being spent — native ETH
+    // included, which the single-wallet version skipped. Finding out after
+    // signing wastes gas and hands the user a failed transaction.
+    {
+      const owner = await this.wallet.addressOf(sessionId);
       const spending = buying ? funding : token;
-      const held = await this.tokens.balanceOf(
-        tokenIn as `0x${string}`,
-        this.wallet.address,
-      );
+      const held =
+        tokenIn === NATIVE_TOKEN
+          ? await this.chain.client.getBalance({ address: owner })
+          : await this.tokens.balanceOf(tokenIn as `0x${string}`, owner);
       if (held < amountIn) {
         return {
           kind: 'rejected',
-          message: `The agent wallet only holds ${formatUnits(held, spending.decimals)} ${spending.symbol}.`,
+          message:
+            `Your wallet holds ${formatUnits(held, spending.decimals)} ${spending.symbol}, ` +
+            `not enough for this trade. Deposit to ${owner} to top up.`,
         };
       }
     }
@@ -358,15 +362,6 @@ export class TradingService {
     intentId: string,
     quoteId: string,
   ): Promise<TradeStep> {
-    if (!this.wallet.available) {
-      return {
-        kind: 'rejected',
-        message:
-          'The agent wallet is offline, so nothing can be signed right now. ' +
-          'Quotes and research still work.',
-      };
-    }
-
     let claimed: boolean;
     try {
       claimed = this.store.claimForExecution(intentId, sessionId, quoteId);
@@ -391,6 +386,7 @@ export class TradingService {
     const intent = this.store.get(intentId, sessionId);
     const token = intent.token!;
     const buying = intent.action === 'buy';
+    let tradeId: string | null = null;
 
     try {
       // Read back what was quoted rather than re-deriving it.
@@ -398,14 +394,34 @@ export class TradingService {
       if (!funding) {
         return { kind: 'rejected', message: 'That quote is incomplete. Start again.' };
       }
-      const hash = await this.swaps.execute({
-        tokenIn: buying ? funding.address : token.address,
-        tokenOut: buying ? token.address : funding.address,
-        quote: intent.quote!,
+      // Recorded before broadcast, so a crash mid-swap leaves a pending row
+      // rather than no trace of a transaction that went out.
+      tradeId = await this.ledger.open({
+        userId: sessionId,
+        side: intent.action,
+        tokenAddress: token.address,
+        tokenSymbol: token.symbol,
+        poolId: intent.pool?.id ?? intent.quote!.poolId,
+        fundingSymbol: funding.symbol,
+        amountIn: intent.quote!.amountIn,
       });
+
+      // Signs with the requesting user's own wallet. The key is decrypted
+      // inside this callback and unreachable once it returns.
+      const hash = await this.wallet.withSigner(sessionId, (client, address) =>
+        this.swaps.execute(
+          {
+            tokenIn: buying ? funding.address : token.address,
+            tokenOut: buying ? token.address : funding.address,
+            quote: intent.quote!,
+          },
+          { client, address },
+        ),
+      );
 
       const receipt = await this.swaps.waitForReceipt(hash);
       if (receipt.status !== 'success') {
+        await this.ledger.settle(tradeId, { status: 'failed', error: 'reverted', txHash: hash });
         this.store.patch(intentId, sessionId, {
           status: 'failed',
           txHash: hash,
@@ -417,6 +433,11 @@ export class TradingService {
         };
       }
 
+      await this.ledger.settle(tradeId, {
+        status: 'confirmed',
+        txHash: hash,
+        amountOut: intent.quote!.amountOut,
+      });
       this.store.patch(intentId, sessionId, { status: 'executed', txHash: hash });
       return {
         kind: 'executed',
@@ -427,6 +448,13 @@ export class TradingService {
       };
     } catch (err) {
       const message = (err as Error).message;
+      // Settle the ledger row, or it sits at `pending` forever — claiming a
+      // transaction might be in flight when signing never even happened.
+      if (tradeId) {
+        await this.ledger
+          .settle(tradeId, { status: 'failed', error: message })
+          .catch(() => undefined);
+      }
       this.store.patch(intentId, sessionId, { status: 'failed', error: message });
       this.log.error(`swap failed for intent ${intentId}: ${message}`);
       return { kind: 'rejected', message: `The swap could not be completed: ${message}` };

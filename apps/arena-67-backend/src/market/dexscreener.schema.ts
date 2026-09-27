@@ -33,6 +33,14 @@ const Info = z
   .partial()
   .optional();
 
+/** Dexscreener reports most figures over four windows; any may be missing. */
+const Windows = z
+  .object({ m5: num.optional(), h1: num.optional(), h6: num.optional(), h24: num.optional() })
+  .partial()
+  .optional();
+
+const Txns = z.object({ buys: num.optional(), sells: num.optional() }).partial().optional();
+
 export const DexPair = z.object({
   chainId: z.string(),
   dexId: z.string().default(''),
@@ -46,12 +54,10 @@ export const DexPair = z.object({
   fdv: num.optional(),
   marketCap: num.optional(),
   liquidity: z.object({ usd: num.optional() }).partial().optional(),
-  volume: z.object({ h24: num.optional() }).partial().optional(),
-  priceChange: z.object({ h24: num.optional() }).partial().optional(),
+  volume: Windows,
+  priceChange: Windows,
   txns: z
-    .object({
-      h24: z.object({ buys: num.optional(), sells: num.optional() }).partial().optional(),
-    })
+    .object({ m5: Txns, h1: Txns, h6: Txns, h24: Txns })
     .partial()
     .optional(),
   pairCreatedAt: num.optional(),
@@ -63,3 +69,11 @@ export const DexTokenResponse = z.object({
 });
 
 export type DexPair = z.infer<typeof DexPair>;
+
+/** `/latest/dex/pairs/{chain}/{ids}` — same pair shape, looked up by pool id. */
+export const DexPairsResponse = z.object({
+  pairs: z.array(DexPair).nullable().default([]),
+});
+
+/** `/tokens/v1/{chain}/{addresses}` — a bare array of pairs. */
+export const DexTokensBatchResponse = z.array(DexPair);

@@ -225,25 +225,59 @@ Also: `selectPool` refuses any poolId not listed on the page, then
 `resolveForToken` proves the pool trades this token before it is pinned.
 
 ### 4 · Backend — trending pane
-- [ ] **Exclude WETH / USDG / native ETH** — they are quote assets and currently
+- [x] **Exclude WETH / USDG / native ETH** — they are quote assets and currently
       occupy the top two rows of a list nobody opens to buy dollars
-- [ ] Enrich the top N with Dexscreener price + 24h change
-- [ ] Research cron 5 min → ~60s
+- [x] Enrich the top N with Dexscreener price + 24h change
+- [x] Research cron 5 min → ~60s
+- [ ] `[stretch]` rank by real 24h volume instead of pool count
+
+**Done 2026-09-25.** Verified live — base assets gone, market data attached:
+
+```
+  10p  WORM          $0.004114    +18.03%   vol    $707,273
+  54p  RLHOOD         $0.00108  +5238.00%   vol    $118,412
+  36p  Protocol     $0.0003401   +557.00%   vol  $1,785,406
+  21p  VLAD         $5.184e-05    -21.53%   vol    $686,158
+  17p  AI              $0.2354     +5.97%   vol  $8,622,466
+  13p  META           $773.082     +5.14%   vol $11,889,022
+```
+
+Every enriched field is nullable and stays null when unknown — a token minted
+minutes ago has no price anywhere, and `$0` would be a lie the UI cannot detect.
+Enrichment is per-token and allowed to fail individually, so one unknown
+contract cannot blank the pane.
+
+**Ranking is still pool count, and it is now visibly the wrong axis.** META
+turns over $11.9M on 13 pools while TAOTAO does $311 on 9, yet TAOTAO ranks
+only four places lower. Volume is already being fetched, so switching is small —
+but it changes what "trending" *means*, which is a product call:
 - [ ] `[stretch]` rank by real 24h volume instead of pool count
 
 ### 5 · UI — token page card
-- [ ] Header: image, name, symbol, copyable address, website + socials links
-- [ ] Stat row: price, market cap, 24h volume, 24h change (green/red), buys/sells
-- [ ] Pool rows: `SYMBOL/QUOTE`, liquidity, price, "+3 smaller pools" hint
-- [ ] Selecting a pool reveals the amount input inline
-- [ ] Amount input: funding symbol from the chosen pool, Enter submits
+- [x] Header: image, name, symbol, copyable address, website + socials links
+- [x] Stat row: price, market cap, 24h volume, 24h change (green/red), buys/sells
+- [x] Pool rows: `SYMBOL/QUOTE`, liquidity, price, "+3 smaller pools" hint
+- [x] Selecting a pool reveals the amount input inline
+- [x] Amount input: funding symbol from the chosen pool, Enter submits
 - [ ] Render optimistically from the pane row's data, fill stats in when they land
-- [ ] No stats → render the page without them, never zeros
+- [x] No stats → render the page without them, never zeros
 
 ### 6 · UI — quote expiry recovery
-- [ ] Replace the dead "Expired" state with **Get fresh quote**
-- [ ] Calls `/trade/requote`; keep old numbers visible while re-pricing
-- [ ] Spinner on the button; no layout collapse
+- [x] Replace the dead "Expired" state with **Get fresh quote**
+- [x] Calls `/trade/requote`; keep old numbers visible while re-pricing
+- [x] Spinner on the button; no layout collapse
+
+**Done 2026-09-25.** `TokenPage.tsx` + `lib/format.ts`. `tsc` clean both apps,
+`next build` green (`/`, `/dashboard`).
+
+`lib/format.ts` enforces the null rule in one place: an unknown value renders as
+an em-dash, never `$0`. It also switches to exponential below 1e-6, because most
+memecoin prices are `$0.00` at two decimals.
+
+**Optimistic render is still not done.** The pane click round-trips before the
+card appears, so there is a visible pause on a slow network even though the row
+already holds symbol, name and price. Left as follow-up, not a blocker:
+- [ ] Render optimistically from the pane row's data, fill stats in when they land
 
 ### 7 · UI — live pane
 - [ ] `RefreshCw` spinning while a fetch is in flight

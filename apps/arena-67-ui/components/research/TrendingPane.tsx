@@ -16,7 +16,12 @@ const POLL_MS = 30_000;
  * backend actually measures. Showing a volume column we aren't computing would
  * be inventing numbers on a trading screen.
  */
-export function TrendingPane({ onPick }: { onPick: (symbol: string) => void }) {
+export function TrendingPane({
+  onPick,
+}: {
+  /** Address is what identifies the token; symbol is only for the transcript. */
+  onPick: (address: string, symbol: string) => void;
+}) {
   const [snap, setSnap] = useState<TrendingSnapshot | null>(null);
   const [failed, setFailed] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
@@ -95,7 +100,7 @@ export function TrendingPane({ onPick }: { onPick: (symbol: string) => void }) {
             <motion.button
               key={t.address}
               type="button"
-              onClick={() => onPick(t.symbol)}
+              onClick={() => onPick(t.address, t.symbol)}
               initial={{ opacity: 0, x: 6 }}
               animate={{ opacity: 1, x: 0 }}
               whileTap={{ scale: 0.97 }}

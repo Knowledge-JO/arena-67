@@ -4,7 +4,8 @@ import { PendingIntentStore, type Quote } from './pending-intent.store';
 import type { TokensService } from './tokens.service';
 import type { QuoteService } from './quote.service';
 import type { SwapService } from './swap.service';
-import type { WalletService } from '../wallet/wallet.service';
+import type { UserWalletService } from '../accounts/user-wallet.service';
+import type { TradeLedgerService } from '../accounts/trade-ledger.service';
 import type { ChainService } from '../chain/chain.service';
 import type { PoolIndexService } from '../chain/pool-index.service';
 import type { BaseToken, NetworkConfig } from '../chain/networks';
@@ -74,6 +75,42 @@ const NETWORK = {
   realFunds: false,
 } as unknown as NetworkConfig;
 
+const POOL_ID =
+  '0x1111111111111111111111111111111111111111111111111111111111111111';
+
+/** The venue the token page offers, and the PoolKey it resolves to. */
+const POOL_ROW = {
+  poolId: POOL_ID,
+  quoteSymbol: 'tUSDG',
+  quoteAddress: BASE_USDG.address,
+  liquidityUsd: 50_000,
+  priceUsd: 1,
+  collapsed: 0,
+  source: 'dexscreener' as const,
+};
+
+const POOL_RECORD = {
+  id: POOL_ID,
+  currency0: BASE_USDG.address,
+  currency1: TOKEN.address,
+  fee: 500,
+  tickSpacing: 10,
+  hooks: '0x0000000000000000000000000000000000000000' as `0x${string}`,
+  block: 1n,
+};
+
+const MARKET = {
+  address: TOKEN.address,
+  symbol: TOKEN.symbol,
+  name: TOKEN.name,
+  imageUrl: null,
+  websites: [],
+  socials: [],
+  stats: null,
+  pools: [POOL_ROW],
+  degraded: false,
+};
+
 const FIXED_QUOTE: Quote = {
   id: 'quote-1',
   amountIn: parseUnits('10', 6),
@@ -83,6 +120,7 @@ const FIXED_QUOTE: Quote = {
   feeTier: 500,
   tickSpacing: 10,
   hooks: '0x0000000000000000000000000000000000000000',
+  poolId: POOL_ID,
   quotedAt: Date.now(),
 };
 
@@ -97,11 +135,22 @@ function build() {
   const tokens = {
     describe: jest.fn(),
     findByTicker: jest.fn(),
-    balanceOf: jest.fn(),
+    // Enough by default; tests about insufficient funds override it.
+    balanceOf: jest.fn().mockResolvedValue(parseUnits('1000000', 6)),
   };
+  // Per-user wallets: the service asks for an address, and borrows a signer
+  // for one callback. The mock runs the callback the way the real one does.
+  const WALLET = '0x1234567890123456789012345678901234567890' as `0x${string}`;
   const wallet = {
-    available: true,
-    address: '0x1234567890123456789012345678901234567890',
+    addressOf: jest.fn().mockResolvedValue(WALLET),
+    withSigner: jest.fn(
+      (_userId: string, work: (c: unknown, a: `0x${string}`) => Promise<unknown>) =>
+        work({}, WALLET),
+    ),
+  };
+  const ledger = {
+    open: jest.fn().mockResolvedValue('trade-1'),
+    settle: jest.fn().mockResolvedValue(undefined),
   };
   const config = {
     getOrThrow: jest.fn((key: string) =>
@@ -112,21 +161,48 @@ function build() {
           : undefined,
     ),
   };
-  const chain = { network: NETWORK, explorer: NETWORK.explorer };
-  const index = { poolsFor: jest.fn() };
+  const chain = {
+    network: NETWORK,
+    explorer: NETWORK.explorer,
+    client: { getBalance: jest.fn().mockResolvedValue(parseUnits('100', 18)) },
+  };
+  const index = {
+    poolsFor: jest.fn(),
+    poolsForToken: jest.fn().mockReturnValue([]),
+    resolveForToken: jest.fn().mockResolvedValue(POOL_RECORD),
+  };
+  const market = { forToken: jest.fn().mockResolvedValue(MARKET) };
 
   const service = new TradingService(
     store,
     quotes as unknown as QuoteService,
     swaps as unknown as SwapService,
     tokens as unknown as TokensService,
-    wallet as unknown as WalletService,
+    wallet as unknown as UserWalletService,
     config as unknown as import('@nestjs/config').ConfigService,
     chain as unknown as ChainService,
     index as unknown as PoolIndexService,
+    market as unknown as import('../market/market.service').MarketService,
+    ledger as unknown as TradeLedgerService,
   );
 
-  return { store, quotes, swaps, tokens, wallet, chain, index, service };
+  return { store, quotes, swaps, tokens, wallet, chain, index, market, ledger, service };
+}
+
+/**
+ * v2 puts a venue choice between the token and the price, so anything that
+ * asserts on a quote has to walk through it. Returns the intent id.
+ */
+async function pickVenue(
+  service: TradingService,
+  session: string,
+  step: Awaited<ReturnType<TradingService['begin']>>,
+): Promise<string> {
+  if (step.kind !== 'token_detail') {
+    throw new Error(`expected token_detail, got ${step.kind}`);
+  }
+  await service.selectPool(session, step.intentId, POOL_ID);
+  return step.intentId;
 }
 
 describe('TradingService', () => {
@@ -140,7 +216,12 @@ describe('TradingService', () => {
       intent({ contractAddress: TOKEN.address }),
     );
 
-    expect(step.kind).toBe('need_amount');
+    // v2: a token with no amount lands on the token page, which carries the
+    // venues to choose from. The amount is asked for once one is picked.
+    expect(step.kind).toBe('token_detail');
+    if (step.kind !== 'token_detail') throw new Error('expected token_detail');
+    expect(step.pools).toHaveLength(1);
+    expect(step.selectedPoolId).toBeUndefined();
   });
 
   it('asks the user to disambiguate when a ticker matches several tokens', async () => {
@@ -164,7 +245,7 @@ describe('TradingService', () => {
     const begin = await service.begin('s1', intent({}));
     if (begin.kind !== 'choose_token') throw new Error('expected choose_token');
     const next = await service.selectToken('s1', begin.intentId, TOKEN.id);
-    expect(next.kind).toBe('need_amount');
+    expect(next.kind).toBe('token_detail');
   });
 
   it('rejects a non-positive amount instead of pretending it is a trade', async () => {
@@ -174,7 +255,7 @@ describe('TradingService', () => {
       's1',
       intent({ ticker: undefined, contractAddress: TOKEN.address }),
     );
-    if (created.kind !== 'need_amount') throw new Error('expected need_amount');
+    if (created.kind !== 'token_detail') throw new Error('expected token_detail');
 
     const bad = await service.setAmount('s1', created.intentId, 0);
     expect(bad.kind).toBe('rejected');
@@ -187,10 +268,12 @@ describe('TradingService', () => {
     // No pools for any base pair: funding falls back to the network default (tUSDG).
     index.poolsFor.mockReturnValue([]);
 
-    const step = await service.begin(
+    const begun = await service.begin(
       's1',
       intent({ amount: 1000, contractAddress: TOKEN.address }),
     );
+    const id = await pickVenue(service, 's1', begun);
+    const step = await service.advance('s1', id);
 
     expect(step.kind).toBe('rejected');
     expect(step.message).toMatch(/about \$1000\.00/);
@@ -198,70 +281,114 @@ describe('TradingService', () => {
   });
 
   it('lets a small buy through and price it via the on-chain quoter', async () => {
-    const { service, tokens, index, quotes, wallet } = build();
+    const { service, tokens, index, quotes } = build();
     tokens.describe.mockResolvedValue(TOKEN);
     index.poolsFor.mockReturnValue([]);
     quotes.quoteExactIn.mockResolvedValue(FIXED_QUOTE);
-    wallet.available = false;
 
-    const step = await service.begin(
+    const begun = await service.begin(
       's1',
       intent({ amount: 10, contractAddress: TOKEN.address }),
     );
+    const id = await pickVenue(service, 's1', begun);
+    const step = await service.advance('s1', id);
 
     expect(step.kind).toBe('confirm');
+    // The chosen pool must reach the quoter. Without it the quoter races every
+    // candidate and could fill through a venue the card never showed.
     expect(quotes.quoteExactIn).toHaveBeenCalledWith({
       tokenIn: BASE_USDG.address,
       tokenOut: TOKEN.address,
       amountIn: parseUnits('10', 6),
       maxSlippageBps: 300,
+      pool: POOL_RECORD,
     });
   });
 
-  it('refuses a named currency with no pool rather than silently substituting', async () => {
+  // The two tests that stood here covered `pickFunding`: a named currency with
+  // no pool, and a funding asset the desk does not trade. Both described v1,
+  // where the desk guessed a funding asset from the user's stated preference
+  // and a pool search. v2 removes that guess entirely — the user picks a venue
+  // and the funding asset is whichever side of that pool is not the token, so
+  // neither failure can arise. The guards below are what replaced them.
+
+  it('refuses a pool the token page never offered', async () => {
     const { service, tokens, index } = build();
     tokens.describe.mockResolvedValue(TOKEN);
-    index.poolsFor.mockImplementation((a: string, b: string) =>
-      a === BASE_WETH.address && b === TOKEN.address ? ['p1'] : [],
-    );
 
-    const step = await service.begin(
+    const begun = await service.begin(
       's1',
-      intent({ amount: 10, currency: 'USDG', contractAddress: TOKEN.address }),
+      intent({ amount: 10, contractAddress: TOKEN.address }),
     );
+    if (begun.kind !== 'token_detail') throw new Error('expected token_detail');
+
+    const other =
+      '0x2222222222222222222222222222222222222222222222222222222222222222';
+    const step = await service.selectPool('s1', begun.intentId, other);
 
     expect(step.kind).toBe('rejected');
-    expect(step.message).toMatch(/no tUSDG pool/);
-    expect(step.message).toMatch(/It trades against WETH/);
+    expect(step.message).toMatch(/not one of the listed pools/);
+    // It must not even be resolved: an unlisted id is refused before we touch
+    // the chain on its behalf.
+    expect(index.resolveForToken).not.toHaveBeenCalled();
   });
 
-  it('refuses a funding asset it does not trade', async () => {
-    const { service, tokens } = build();
+  it('refuses a listed pool that turns out not to trade this token', async () => {
+    const { service, tokens, index } = build();
     tokens.describe.mockResolvedValue(TOKEN);
-
-    const step = await service.begin(
-      's1',
-      intent({ amount: 10, currency: 'DOGE', contractAddress: TOKEN.address }),
+    // A poolId is opaque and reaches us via the browser from a third-party
+    // API, so the recovered PoolKey is what proves the pair.
+    index.resolveForToken.mockRejectedValue(
+      new Error('That pool does not trade this token.'),
     );
 
+    const begun = await service.begin(
+      's1',
+      intent({ amount: 10, contractAddress: TOKEN.address }),
+    );
+    if (begun.kind !== 'token_detail') throw new Error('expected token_detail');
+
+    const step = await service.selectPool('s1', begun.intentId, POOL_ID);
+
     expect(step.kind).toBe('rejected');
-    expect(step.message).toMatch(/do not trade DOGE/);
+    expect(step.message).toMatch(/does not trade this token/);
+  });
+
+  it('derives the funding asset from the chosen pool, not from preferences', async () => {
+    const { service, tokens, quotes, wallet } = build();
+    tokens.describe.mockResolvedValue(TOKEN);
+    quotes.quoteExactIn.mockResolvedValue(FIXED_QUOTE);
+
+    // The user asks to spend WETH, but the venue they pick is tUSDG/TOKEN.
+    // The pool wins: it is the thing that can actually fill.
+    const begun = await service.begin(
+      's1',
+      intent({ amount: 10, currency: 'WETH', contractAddress: TOKEN.address }),
+    );
+    const id = await pickVenue(service, 's1', begun);
+    const step = await service.advance('s1', id);
+
+    expect(step.kind).toBe('confirm');
+    if (step.kind !== 'confirm') throw new Error('expected confirm');
+    expect(step.summary.spend).toContain('tUSDG');
+    expect(step.summary.venue).toBe(`${TOKEN.symbol}/tUSDG`);
   });
 
   it('rejects when the agent wallet holds too little of the spent asset', async () => {
     const { service, tokens, index, wallet } = build();
     tokens.describe.mockResolvedValue(TOKEN);
     index.poolsFor.mockReturnValue([]);
-    wallet.available = true;
     tokens.balanceOf.mockResolvedValue(parseUnits('1', 6));
 
-    const step = await service.begin(
+    const begun = await service.begin(
       's1',
       intent({ amount: 10, contractAddress: TOKEN.address }),
     );
+    const id = await pickVenue(service, 's1', begun);
+    const step = await service.advance('s1', id);
 
     expect(step.kind).toBe('rejected');
-    expect(step.message).toMatch(/only holds/);
+    expect(step.message).toMatch(/not enough for this trade/);
   });
 
   it('signs and reports a fill after an explicit confirm', async () => {
@@ -269,14 +396,17 @@ describe('TradingService', () => {
     tokens.describe.mockResolvedValue(TOKEN);
     index.poolsFor.mockReturnValue([]);
     quotes.quoteExactIn.mockResolvedValue(FIXED_QUOTE);
-    wallet.available = true;
     tokens.balanceOf.mockResolvedValue(parseUnits('100', 6));
     swaps.execute.mockResolvedValue('0xdeadbeef');
     swaps.waitForReceipt.mockResolvedValue({ status: 'success' });
 
-    const quoted = await service.begin(
+    const begun = await service.begin(
       's1',
       intent({ amount: 10, contractAddress: TOKEN.address }),
+    );
+    const quoted = await service.advance(
+      's1',
+      await pickVenue(service, 's1', begun),
     );
     if (quoted.kind !== 'confirm') throw new Error('expected confirm');
 
@@ -291,14 +421,17 @@ describe('TradingService', () => {
     tokens.describe.mockResolvedValue(TOKEN);
     index.poolsFor.mockReturnValue([]);
     quotes.quoteExactIn.mockResolvedValue(FIXED_QUOTE);
-    wallet.available = true;
     tokens.balanceOf.mockResolvedValue(parseUnits('100', 6));
     swaps.execute.mockResolvedValue('0xdeadbeef');
     swaps.waitForReceipt.mockResolvedValue({ status: 'success' });
 
-    const quoted = await service.begin(
+    const begun = await service.begin(
       's1',
       intent({ amount: 10, contractAddress: TOKEN.address }),
+    );
+    const quoted = await service.advance(
+      's1',
+      await pickVenue(service, 's1', begun),
     );
     if (quoted.kind !== 'confirm') throw new Error('expected confirm');
 
@@ -312,28 +445,39 @@ describe('TradingService', () => {
     expect(second.message).toMatch(/already went through/);
   });
 
-  it('reports that a wallet-less desk can only research, not sign', async () => {
-    const { service, tokens, index, quotes, wallet } = build();
+  // Replaces "a wallet-less desk can only research": with per-user wallets
+  // there is no desk-wide offline state. The failure that remains is a single
+  // user's key that will not unlock — a wrong master key, a tampered row, a
+  // ciphertext moved to another address. That must refuse cleanly, never sign,
+  // and never leave the trade looking as if it went through.
+  it('refuses cleanly when the user wallet cannot be unlocked', async () => {
+    const { service, tokens, index, quotes, wallet, swaps, ledger } = build();
     tokens.describe.mockResolvedValue(TOKEN);
     index.poolsFor.mockReturnValue([]);
     quotes.quoteExactIn.mockResolvedValue(FIXED_QUOTE);
-    wallet.available = false;
+    wallet.withSigner.mockRejectedValue(new Error('This wallet could not be unlocked.'));
 
-    const step = await service.begin(
+    const begun = await service.begin(
       's1',
       intent({ amount: 10, contractAddress: TOKEN.address }),
     );
-    if (step.kind === 'need_amount') void step;
-    // The price step itself still works read-only...
-    const confirm = step.kind === 'confirm' ? step : null;
-    if (!confirm) throw new Error('expected a quote even without a wallet');
-    const rejected = await service.confirm(
-      's1',
-      confirm.intentId,
-      confirm.quoteId,
-    );
+    const step = await service.advance('s1', await pickVenue(service, 's1', begun));
+    if (step.kind !== 'confirm') throw new Error('expected confirm');
+
+    const rejected = await service.confirm('s1', step.intentId, step.quoteId);
+
     expect(rejected.kind).toBe('rejected');
-    expect(rejected.message).toMatch(/offline/);
+    expect(rejected.message).toMatch(/could not be unlocked/);
+    expect(swaps.execute).not.toHaveBeenCalled();
+    // The pre-broadcast ledger row must be settled as failed, not left pending
+    // forever as if a transaction might still be in flight. Asserted
+    // positively: a check that it was *not* confirmed passes just as happily
+    // when settle is never called at all, which is the bug this guards.
+    expect(ledger.open).toHaveBeenCalledTimes(1);
+    expect(ledger.settle).toHaveBeenCalledWith(
+      'trade-1',
+      expect.objectContaining({ status: 'failed' }),
+    );
   });
 
   it('surfaces a reverted on-chain transaction as a rejected fill', async () => {
@@ -341,14 +485,17 @@ describe('TradingService', () => {
     tokens.describe.mockResolvedValue(TOKEN);
     index.poolsFor.mockReturnValue([]);
     quotes.quoteExactIn.mockResolvedValue(FIXED_QUOTE);
-    wallet.available = true;
     tokens.balanceOf.mockResolvedValue(parseUnits('100', 6));
     swaps.execute.mockResolvedValue('0xdeadbeef');
     swaps.waitForReceipt.mockResolvedValue({ status: 'reverted' });
 
-    const quoted = await service.begin(
+    const begun = await service.begin(
       's1',
       intent({ amount: 10, contractAddress: TOKEN.address }),
+    );
+    const quoted = await service.advance(
+      's1',
+      await pickVenue(service, 's1', begun),
     );
     if (quoted.kind !== 'confirm') throw new Error('expected confirm');
     const rejected = await service.confirm(

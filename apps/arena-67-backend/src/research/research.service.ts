@@ -1,28 +1,35 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PoolIndexService } from '../chain/pool-index.service';
+import { MarketService } from '../market/market.service';
 
 export interface TrendingToken {
   address: string;
   symbol: string;
   name: string;
-  volume24hUsd: number;
-  priceChange24hPct: number;
-  liquidityUsd: number;
+  decimals: number;
   poolCount: number;
+  /** Null rather than zero when market data is unavailable. */
+  priceUsd: number | null;
+  priceChange24h: number | null;
+  volume24h: number | null;
+  imageUrl: string | null;
 }
 
+/** How many tokens get a market lookup. Each is one upstream request. */
+const ENRICH = 12;
+
 /**
- * The research half of the arena: what is actually moving on Robinhood Chain.
+ * The research half of the arena: what is moving on Robinhood Chain.
  *
- * Scoped deliberately to on-chain top-traded rather than the X firehose and
- * news ingestion the original plan called for. Those need a paid X tier and
- * two more pipelines; this needs one poll and is the closer match to "top
- * trading memecoins right now".
+ * Ranking is by pool count within the index window, which is a proxy for
+ * activity rather than volume — honest, because it comes straight from chain
+ * state, but it rewards many thin pools as much as one deep one. Price and
+ * volume are layered on from the market service so the pane shows numbers
+ * traders actually recognise.
  *
- * Results are cached and served from memory so the UI never waits on an
- * upstream call, and a failed refresh keeps serving the last good snapshot
- * rather than blanking the panel.
+ * Every enriched field is nullable. A token minted minutes ago has no price
+ * anywhere, and rendering that as `$0` would be a lie the UI cannot detect.
  */
 @Injectable()
 export class ResearchService implements OnModuleInit {
@@ -31,14 +38,14 @@ export class ResearchService implements OnModuleInit {
   private lastRefresh = 0;
   private lastError: string | null = null;
 
-  constructor(private readonly index: PoolIndexService) {}
+  constructor(
+    private readonly index: PoolIndexService,
+    private readonly market: MarketService,
+  ) {}
 
   /**
    * Fills the panel at startup instead of leaving it blank until the first
-   * cron tick — five minutes of an empty sidebar reads as a broken backend.
-   *
-   * The pool index backfills in the background, so this waits for it to report
-   * ready rather than racing it and caching an empty list.
+   * cron tick — a blank sidebar reads as a broken backend.
    */
   onModuleInit(): void {
     void this.primeWhenIndexed();
@@ -56,10 +63,9 @@ export class ResearchService implements OnModuleInit {
     setTimeout(() => void this.primeWhenIndexed(attempt + 1), 3_000);
   }
 
-  @Cron(CronExpression.EVERY_5_MINUTES)
+  @Cron(CronExpression.EVERY_MINUTE)
   async refresh(): Promise<void> {
     try {
-      // TODO: source from hood-mcp's memecoin/chain-stats tools.
       const next = await this.fetchTopTraded();
       this.trending = next;
       this.lastRefresh = Date.now();
@@ -76,27 +82,47 @@ export class ResearchService implements OnModuleInit {
       index: this.index.stats(),
       tokens: this.trending,
       lastRefresh: this.lastRefresh,
-      stale: Date.now() - this.lastRefresh > 15 * 60_000,
+      stale: Date.now() - this.lastRefresh > 5 * 60_000,
       error: this.lastError,
     };
   }
 
-  /**
-   * Ranks by how many pools reference a token. That is a proxy for activity,
-   * not volume — an honest one, since it comes straight from chain state — but
-   * it rewards tokens with many thin pools as much as one deep pool. Swapping
-   * in real 24h volume is the obvious upgrade once an indexer is available.
-   */
   private async fetchTopTraded(): Promise<TrendingToken[]> {
-    const hot = await this.index.hottest(12);
-    return hot.map((t) => ({
-      address: t.address,
-      symbol: t.symbol,
-      name: t.name,
-      volume24hUsd: 0,
-      priceChange24hPct: 0,
-      liquidityUsd: 0,
-      poolCount: t.poolCount,
-    }));
+    const hot = await this.index.hottest(ENRICH);
+
+    // Enrichment runs in parallel and is allowed to fail per-token: one
+    // unknown contract must not blank the whole pane.
+    const enriched = await Promise.all(
+      hot.map(async (t) => {
+        const base: TrendingToken = {
+          address: t.address,
+          symbol: t.symbol,
+          name: t.name,
+          decimals: t.decimals,
+          poolCount: t.poolCount,
+          priceUsd: null,
+          priceChange24h: null,
+          volume24h: null,
+          imageUrl: null,
+        };
+        try {
+          const m = await this.market.forToken(t.address);
+          if (!m) return base;
+          return {
+            ...base,
+            symbol: m.symbol || base.symbol,
+            name: m.name || base.name,
+            priceUsd: m.stats?.priceUsd ?? null,
+            priceChange24h: m.stats?.priceChange24h ?? null,
+            volume24h: m.stats?.volume24h ?? null,
+            imageUrl: m.imageUrl,
+          };
+        } catch {
+          return base;
+        }
+      }),
+    );
+
+    return enriched;
   }
 }

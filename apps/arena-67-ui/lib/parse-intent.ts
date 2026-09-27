@@ -62,9 +62,20 @@ export function parseIntent(input: string): TradeIntent | null {
   return intent;
 }
 
-/** Shown in the empty state so people know the shape without a manual. */
+/**
+ * Shown in the empty state.
+ *
+ * These are prompts now, not syntax. The desk used to need "buy X" in a shape
+ * a regex recognised; it takes questions, so the examples should invite them
+ * rather than teach a grammar that no longer exists.
+ */
+/**
+ * Starter questions. Tapping one sends it, so each has to work as written and
+ * show off a different thing the desk can do.
+ */
 export const EXAMPLES = [
-  'buy 25 USDG of ANIME',
-  'sell SATURN',
-  'buy 10 USDG of 0x…',
+  'What are the most traded tokens today?',
+  'What do you know about microduck?',
+  'Which wallets hold more than one of the top 10 tokens by volume today?',
+  'Show my portfolio',
 ] as const;

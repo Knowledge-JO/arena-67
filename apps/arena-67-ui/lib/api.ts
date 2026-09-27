@@ -1,55 +1,142 @@
-import type { TradeIntent, TradeStep, TrendingSnapshot } from './types';
+import type {
+  AgentReply,
+  HolderKind,
+  HolderOverlap,
+  HoldersBlock,
+  HoldersStatus,
+  ConversationSummary,
+  Me,
+  Portfolio,
+  StoredMessage,
+  TradeStep,
+  TrendingSnapshot,
+} from './types';
 
 const BASE =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') ?? 'http://localhost:9000';
 
-class ApiError extends Error {}
+export class ApiError extends Error {
+  constructor(message: string, readonly status?: number) {
+    super(message);
+  }
+}
 
-async function post<T>(path: string, body: unknown): Promise<T> {
-  let res: Response;
+/** Thrown when the session is gone and could not be renewed. */
+export class SignedOutError extends ApiError {}
+
+/**
+ * Sessions live in httpOnly cookies, which page JavaScript cannot read — that
+ * is the point: an XSS bug cannot lift a session that controls a wallet. So
+ * every request sends `credentials: 'include'` and lets the browser attach
+ * them, and the client never sees or stores a token.
+ */
+async function raw(path: string, init: RequestInit = {}): Promise<Response> {
   try {
-    res = await fetch(`${BASE}${path}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+    return await fetch(`${BASE}${path}`, {
+      ...init,
+      credentials: 'include',
+      headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
     });
   } catch {
-    throw new ApiError(
-      'Cannot reach the trading desk. Is the backend running on :9000?',
-    );
+    throw new ApiError('Cannot reach the trading desk. Is the backend running on :9000?');
   }
+}
+
+/** One refresh in flight at a time, however many requests hit a 401 at once. */
+let refreshing: Promise<boolean> | null = null;
+
+function refresh(): Promise<boolean> {
+  refreshing ??= raw('/auth/refresh', { method: 'POST' })
+    .then(async (r) => r.ok && ((await r.json()) as { ok: boolean }).ok)
+    .catch(() => false)
+    .finally(() => {
+      refreshing = null;
+    });
+  return refreshing;
+}
+
+/**
+ * The access token lives fifteen minutes. When it lapses mid-conversation the
+ * request fails with 401; this renews it once and retries, so an expired token
+ * is invisible rather than dumping someone out of a chat they are in.
+ */
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  let res = await raw(path, init);
+
+  if (res.status === 401 && !path.startsWith('/auth/')) {
+    if (await refresh()) res = await raw(path, init);
+    if (res.status === 401) throw new SignedOutError('Your session ended. Sign in again.', 401);
+  }
+
   if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new ApiError(detail.slice(0, 200) || `Request failed (${res.status})`);
+    const body = (await res.json().catch(() => null)) as { message?: string | string[] } | null;
+    const msg = Array.isArray(body?.message) ? body?.message.join('; ') : body?.message;
+    throw new ApiError(msg || `Request failed (${res.status})`, res.status);
   }
   return res.json() as Promise<T>;
 }
 
+const post = <T>(path: string, body: unknown = {}) =>
+  request<T>(path, { method: 'POST', body: JSON.stringify(body) });
+
 export const api = {
-  wallet: async (): Promise<{ address: string }> => {
-    const res = await fetch(`${BASE}/trade/wallet`);
-    if (!res.ok) throw new ApiError('Could not read the agent wallet.');
-    return res.json();
+  // --- auth
+  requestCode: (email: string) => post<{ sent: boolean }>('/auth/code', { email }),
+  verifyCode: (email: string, code: string) => post<Me & { isNewUser: boolean }>('/auth/verify', { email, code }),
+  logout: () => post<{ ok: boolean }>('/auth/logout'),
+
+  /** The signed-in user, or null — never throws for "not signed in". */
+  me: async (): Promise<Me | null> => {
+    const r = await raw('/auth/me');
+    if (r.ok) return r.json() as Promise<Me>;
+    if (r.status === 401 && (await refresh())) {
+      const again = await raw('/auth/me');
+      if (again.ok) return again.json() as Promise<Me>;
+    }
+    return null;
   },
 
-  begin: (sessionId: string, intent: TradeIntent) =>
-    post<TradeStep>('/trade/begin', { sessionId, intent }),
+  // --- wallet
+  balance: () => request<{ address: string; eth: string }>('/wallet/balance'),
+  portfolio: () => request<Portfolio>('/wallet/portfolio'),
+  requestExportCode: () => post<{ sent: boolean }>('/wallet/export/code'),
+  exportKey: (code: string) => post<{ address: string; privateKey: string }>('/wallet/export', { code }),
 
-  // Only the opaque id travels — never the address the card displayed.
-  selectToken: (sessionId: string, intentId: string, candidateId: string) =>
-    post<TradeStep>('/trade/select-token', { sessionId, intentId, candidateId }),
+  // --- conversations
+  conversations: () => request<ConversationSummary[]>('/conversations'),
+  createConversation: () => post<{ id: string; title: string }>('/conversations'),
+  messages: (id: string) => request<StoredMessage[]>(`/conversations/${id}/messages`),
 
-  setAmount: (sessionId: string, intentId: string, amount: number) =>
-    post<TradeStep>('/trade/amount', { sessionId, intentId, amount }),
+  /** One agent turn. Omit conversationId to start a new conversation. */
+  chat: (message: string, conversationId?: string) =>
+    post<AgentReply>('/agent/chat', { message, conversationId }),
 
-  confirm: (sessionId: string, intentId: string, quoteId: string) =>
-    post<TradeStep>('/trade/confirm', { sessionId, intentId, quoteId }),
+  // --- trading. Identity comes from the session cookie, never the body.
+  selectToken: (intentId: string, candidateId: string) =>
+    post<TradeStep>('/trade/select-token', { intentId, candidateId }),
+  setAmount: (intentId: string, amount: number) =>
+    post<TradeStep>('/trade/amount', { intentId, amount }),
+  selectPool: (intentId: string, poolId: string) =>
+    post<TradeStep>('/trade/select-pool', { intentId, poolId }),
+  requote: (intentId: string) => post<TradeStep>('/trade/requote', { intentId }),
+  confirm: (intentId: string, quoteId: string) =>
+    post<TradeStep>('/trade/confirm', { intentId, quoteId }),
 
+  // --- research (signed in)
+  /** Indexing progress only; queues nothing, so cards can poll it. */
+  holdersStatus: (tokens: string[]) =>
+    request<Array<{ address: string; status: HoldersStatus; progress: number }>>(
+      `/research/holders/status?tokens=${tokens.join(',')}`,
+    ),
+  tokenHolders: (address: string, limit = 10) =>
+    request<HoldersBlock & { address: string }>(`/research/tokens/${address}/holders?limit=${limit}`),
+  commonHolders: (body: { tokens: string[]; topN?: number; minTokens?: number; include?: HolderKind[] }) =>
+    post<HolderOverlap>('/research/common-holders', body),
+
+  // --- research (public)
   trending: async (): Promise<TrendingSnapshot> => {
-    const res = await fetch(`${BASE}/research/trending`, { cache: 'no-store' });
-    if (!res.ok) throw new ApiError('Could not load trending tokens.');
-    return res.json();
+    const r = await raw('/research/trending', { cache: 'no-store' });
+    if (!r.ok) throw new ApiError('Could not load trending tokens.');
+    return r.json();
   },
 };
-
-export { ApiError };

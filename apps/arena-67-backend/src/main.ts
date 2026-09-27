@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import cookieParser from 'cookie-parser';
 import { ConfigService } from '@nestjs/config';
 import { Logger } from '@nestjs/common';
 import { AppModule } from './app.module';
@@ -15,6 +16,12 @@ async function bootstrap() {
 
   const app = await NestFactory.create(AppModule);
   const config = app.get(ConfigService);
+
+  // Sessions live in httpOnly cookies, which Nest does not parse by default.
+  // So SIGTERM from a watch restart closes the database and stops background
+  // indexers between chunks, rather than killing them mid-write.
+  app.enableShutdownHooks();
+  app.use(cookieParser());
 
   const allowed = config
     .getOrThrow<string>('CORS_ORIGIN')
@@ -34,7 +41,10 @@ async function bootstrap() {
       if (!origin) return cb(null, true);
       if (allowed.includes(origin)) return cb(null, true);
       if (lenient && LOCALHOST.test(origin)) return cb(null, true);
-      cb(new Error(`Origin ${origin} is not allowed by CORS_ORIGIN.`));
+      // Refuse by omitting the CORS headers, which the browser enforces. Passing
+      // an Error here turned an ordinary refusal into a 500, which reads in the
+      // logs as the server failing rather than doing its job.
+      cb(null, false);
     },
     credentials: true,
   });
@@ -44,4 +54,18 @@ async function bootstrap() {
   new Logger('bootstrap').log(`Arena 67 backend listening on :${port}`);
 }
 
-void bootstrap();
+// The indexers, scanners and caches run in the background against a remote
+// database and a public RPC; a stray rejection from one of them is logged, not
+// allowed to take the whole server (and every user's session) down with it.
+process.on('unhandledRejection', (reason) => {
+  new Logger('process').error(
+    `unhandled rejection: ${(reason as Error)?.message?.split('\n')[0] ?? String(reason)}`,
+  );
+});
+
+// A startup that fails for real says so in one line and exits non-zero,
+// rather than dying on an unhandled rejection with a raw stack trace.
+bootstrap().catch((err: Error) => {
+  new Logger('bootstrap').error(`backend failed to start: ${err.message?.split('\n')[0] ?? err}`);
+  process.exit(1);
+});
