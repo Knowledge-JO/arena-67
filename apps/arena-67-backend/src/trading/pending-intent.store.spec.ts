@@ -19,6 +19,7 @@ function quote(id = 'quote-1') {
     feeTier: 500,
     tickSpacing: 10,
     hooks: '0x0000000000000000000000000000000000000000' as `0x${string}`,
+    poolId: '0xpool',
     quotedAt: Date.now(),
   };
 }

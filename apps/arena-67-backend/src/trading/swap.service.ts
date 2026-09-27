@@ -1,7 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { encodeAbiParameters, encodePacked, maxUint160, maxUint256 } from 'viem';
+import {
+  encodeAbiParameters,
+  encodePacked,
+  maxUint160,
+  maxUint256,
+  type WalletClient,
+} from 'viem';
 import { ChainService } from '../chain/chain.service';
-import { WalletService } from '../wallet/wallet.service';
 import { NATIVE_TOKEN } from '../chain/networks';
 import {
   UNIVERSAL_ROUTER_ABI,
@@ -14,6 +19,16 @@ import {
   ACTION_TAKE_ALL,
 } from './uniswap-v4.abi';
 import type { Quote } from './pending-intent.store';
+
+/**
+ * Whose funds, and the client that signs for them. Passed in rather than
+ * injected: there is no longer one desk wallet, and a swap that reached for a
+ * global signer could spend from the wrong user's account.
+ */
+export interface Signer {
+  client: WalletClient;
+  address: `0x${string}`;
+}
 
 export interface SwapParams {
   tokenIn: `0x${string}`;
@@ -36,20 +51,17 @@ const DEADLINE_SECONDS = 120n;
 export class SwapService {
   private readonly log = new Logger(SwapService.name);
 
-  constructor(
-    private readonly chain: ChainService,
-    private readonly wallet: WalletService,
-  ) {}
+  constructor(private readonly chain: ChainService) {}
 
   private get v4() {
     return this.chain.network.uniswapV4;
   }
 
-  async execute(params: SwapParams): Promise<`0x${string}`> {
+  async execute(params: SwapParams, signer: Signer): Promise<`0x${string}`> {
     const { tokenIn, tokenOut, quote } = params;
     const native = tokenIn.toLowerCase() === NATIVE_TOKEN.toLowerCase();
 
-    if (!native) await this.ensurePermit2Allowance(tokenIn, quote.amountIn);
+    if (!native) await this.ensurePermit2Allowance(tokenIn, quote.amountIn, signer);
 
     const [currency0, currency1] =
       tokenIn.toLowerCase() < tokenOut.toLowerCase()
@@ -103,7 +115,7 @@ export class SwapService {
     // Simulate first. A revert here costs nothing; the same revert after
     // broadcast costs gas and leaves the user staring at a failed hash.
     const { request } = await this.chain.client.simulateContract({
-      account: this.wallet.address,
+      account: signer.address,
       address: this.v4.UNIVERSAL_ROUTER,
       abi: UNIVERSAL_ROUTER_ABI,
       functionName: 'execute',
@@ -112,8 +124,8 @@ export class SwapService {
       chain: this.chain.network.chain,
     });
 
-    const hash = await this.wallet.walletClient.writeContract(request);
-    this.log.log(`swap broadcast ${hash}`);
+    const hash = await signer.client.writeContract(request);
+    this.log.log(`swap broadcast ${hash} from ${signer.address}`);
     return hash;
   }
 
@@ -129,8 +141,9 @@ export class SwapService {
   private async ensurePermit2Allowance(
     token: `0x${string}`,
     amount: bigint,
+    signer: Signer,
   ): Promise<void> {
-    const owner = this.wallet.address;
+    const owner = signer.address;
 
     const erc20Allowance = (await this.chain.client.readContract({
       address: token,
@@ -148,7 +161,7 @@ export class SwapService {
         args: [this.v4.PERMIT2, maxUint256],
         chain: this.chain.network.chain,
       });
-      const hash = await this.wallet.walletClient.writeContract(request);
+      const hash = await signer.client.writeContract(request);
       await this.chain.client.waitForTransactionReceipt({ hash });
       this.log.log(`approved Permit2 for ${token}`);
     }
@@ -171,7 +184,7 @@ export class SwapService {
         args: [token, this.v4.UNIVERSAL_ROUTER, maxUint160, expiry],
         chain: this.chain.network.chain,
       });
-      const hash = await this.wallet.walletClient.writeContract(request);
+      const hash = await signer.client.writeContract(request);
       await this.chain.client.waitForTransactionReceipt({ hash });
       this.log.log(`approved router on Permit2 for ${token}`);
     }

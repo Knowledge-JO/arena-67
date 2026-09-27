@@ -29,6 +29,8 @@ export interface TokenMeta {
 }
 
 const CHUNK = 100_000n;
+/** Contracts a single cold search may hydrate before answering. */
+const SEARCH_HYDRATE_LIMIT = 100;
 
 /**
  * An index of live Uniswap v4 pools, built by replaying the PoolManager's
@@ -56,6 +58,13 @@ export class PoolIndexService implements OnModuleInit {
   private readonly pools = new Map<string, PoolRecord>();
   private readonly byToken = new Map<string, Set<string>>();
   private readonly meta = new Map<string, TokenMeta>();
+  /**
+   * poolId -> PoolKey, for pools outside the backfill window. A PoolKey is
+   * immutable once initialised, so this never needs invalidating. A null entry
+   * means the chain confirmed no such pool — cached too, since that answer
+   * cannot change either.
+   */
+  private readonly resolved = new Map<string, PoolRecord | null>();
   private lastBlock = 0n;
   private ready = false;
 
@@ -64,17 +73,39 @@ export class PoolIndexService implements OnModuleInit {
     private readonly config: ConfigService,
   ) {}
 
-  async onModuleInit(): Promise<void> {
-    const head = await this.chain.client.getBlockNumber();
+  onModuleInit(): void {
+    void this.start();
+  }
+
+  /**
+   * Starts the backfill. Nothing awaits it — boot does not wait on the pool
+   * index, and a failed head read is retried here rather than failing the
+   * whole server's startup, which it used to.
+   */
+  private async start(attempt = 1): Promise<void> {
+    let head: bigint;
+    try {
+      head = await this.chain.latestBlock();
+    } catch (e) {
+      const wait = Math.min(60, 5 * attempt);
+      this.log.warn(`pool index cannot read the chain head yet, retrying in ${wait}s: ${(e as Error).message.split('\n')[0]}`);
+      setTimeout(() => void this.start(attempt + 1), wait * 1_000);
+      return;
+    }
     const span = BigInt(this.config.get<number>('POOL_INDEX_SPAN') ?? 200_000);
     // Backfill runs unawaited: a cold index should not hold up the API, and
     // every read path already copes with an index that is still filling.
     void this.scan(head - span, head)
-      .then(() => {
+      .then(async () => {
         this.ready = true;
         this.log.log(
           `pool index ready — ${this.pools.size} pools, ${this.byToken.size} tokens`,
         );
+        // Warm the metadata cache in the background. Without this the first
+        // search of a session pays to hydrate every indexed token — a thousand
+        // contracts over ten multicalls — and times out before answering.
+        await this.hydrate([...this.byToken.keys()] as Address[]);
+        this.log.log(`metadata warm — ${this.meta.size} tokens hydrated`);
       })
       .catch((e) => this.log.error(`initial pool scan failed: ${e.message}`));
   }
@@ -84,7 +115,7 @@ export class PoolIndexService implements OnModuleInit {
   async catchUp(): Promise<void> {
     if (!this.lastBlock) return;
     try {
-      const head = await this.chain.client.getBlockNumber();
+      const head = await this.chain.latestBlock();
       if (head > this.lastBlock) await this.scan(this.lastBlock + 1n, head);
     } catch (e) {
       this.log.warn(`pool index catch-up failed: ${(e as Error).message}`);
@@ -95,7 +126,7 @@ export class PoolIndexService implements OnModuleInit {
     for (let start = from; start <= to; start += CHUNK) {
       const end = start + CHUNK - 1n > to ? to : start + CHUNK - 1n;
       try {
-        const logs = await this.chain.client.getLogs({
+        const logs = await this.chain.backgroundClient.getLogs({
           address: this.chain.network.uniswapV4.POOL_MANAGER,
           event: INITIALIZE_EVENT,
           fromBlock: start,
@@ -154,6 +185,108 @@ export class PoolIndexService implements OnModuleInit {
   }
 
   /**
+   * Recovers a pool's key from its id, looking beyond the indexed window.
+   *
+   * The index only holds a rolling ~5.6h of pool creations, but Dexscreener
+   * happily reports pools years older — microduck's deepest venue was created
+   * at block 47.4M against a hook, which no amount of tier-guessing would
+   * reconstruct. A poolId is keccak(PoolKey) and cannot be reversed, but
+   * `Initialize` declares `id` as an indexed topic, so one filtered getLogs
+   * over the full range recovers the key in around two seconds.
+   *
+   * Throws on RPC failure rather than returning null: "the chain says no such
+   * pool" and "we could not ask" must not collapse into the same answer, or a
+   * network blip would be cached as a permanent negative.
+   */
+  async resolveById(poolId: string): Promise<PoolRecord | null> {
+    const key = poolId.toLowerCase();
+
+    const indexed = this.pools.get(poolId) ?? this.pools.get(key);
+    if (indexed) return indexed;
+
+    if (this.resolved.has(key)) return this.resolved.get(key) ?? null;
+
+    const logs = await this.chain.client.getLogs({
+      address: this.chain.network.uniswapV4.POOL_MANAGER,
+      event: INITIALIZE_EVENT,
+      args: { id: key as `0x${string}` },
+      fromBlock: 0n,
+      toBlock: 'latest',
+    });
+
+    const found = logs[0];
+    if (!found) {
+      this.resolved.set(key, null);
+      return null;
+    }
+
+    const a = found.args as {
+      currency0: Address;
+      currency1: Address;
+      fee: number;
+      tickSpacing: number;
+      hooks: Address;
+    };
+    const record: PoolRecord = {
+      id: poolId,
+      currency0: a.currency0,
+      currency1: a.currency1,
+      fee: Number(a.fee),
+      tickSpacing: Number(a.tickSpacing),
+      hooks: a.hooks,
+      block: found.blockNumber ?? 0n,
+    };
+
+    this.resolved.set(key, record);
+    this.log.debug(`resolved pool ${key.slice(0, 12)}… from block ${record.block}`);
+    return record;
+  }
+
+  /**
+   * Resolves a pool and proves it actually trades the token in hand.
+   *
+   * The poolId reaches us from the browser, having originally come from a
+   * third-party API. Neither is grounds to sign against it. Checking that the
+   * recovered key really contains this token is what stops a swapped id
+   * pointing the trade at a different pair — the id is opaque, so nothing
+   * about it looks wrong until the funds have moved.
+   */
+  async resolveForToken(poolId: string, token: Address): Promise<PoolRecord> {
+    const pool = await this.resolveById(poolId);
+    if (!pool) throw new Error('That pool does not exist on this chain.');
+
+    const want = token.toLowerCase();
+    const pair = [pool.currency0.toLowerCase(), pool.currency1.toLowerCase()];
+    if (!pair.includes(want)) {
+      this.log.warn(`pool ${poolId.slice(0, 12)}… does not trade ${token}`);
+      throw new Error('That pool does not trade this token.');
+    }
+    return pool;
+  }
+
+  /** Every indexed pool that touches this token, regardless of the other side. */
+  poolsForToken(token: Address): PoolRecord[] {
+    const ids = this.byToken.get(token.toLowerCase());
+    if (!ids) return [];
+    const out: PoolRecord[] = [];
+    for (const id of ids) {
+      const p = this.pools.get(id);
+      if (p) out.push(p);
+    }
+    return out.sort((a, b) => (b.block > a.block ? 1 : -1));
+  }
+
+  /** Cached ERC-20 metadata, if this token has been hydrated. */
+  metaOf(token: Address): TokenMeta | undefined {
+    return this.meta.get(token.toLowerCase());
+  }
+
+  symbolOf(token: Address): string | undefined {
+    if (token.toLowerCase() === NATIVE_TOKEN.toLowerCase()) return 'ETH';
+    return this.meta.get(token.toLowerCase())?.symbol;
+  }
+
+  /**
    * Ticker search over indexed tokens. Exact symbol matches rank above
    * prefixes, then by how many pools reference the token — a rough but honest
    * proxy for "which Trump did you mean", since the contract nobody has opened
@@ -162,7 +295,15 @@ export class PoolIndexService implements OnModuleInit {
   async search(query: string, limit = 8): Promise<TokenMeta[]> {
     const q = query.trim().toLowerCase();
     if (!q) return [];
-    await this.hydrate([...this.byToken.keys()] as Address[]);
+
+    // Hydrate at most one batch per call. The boot warm-up normally means
+    // there is nothing left to do; this only matters if a search lands while
+    // the cache is still filling, and there it keeps the call bounded instead
+    // of letting it inherit the whole backlog.
+    const cold = [...this.byToken.keys()].filter(
+      (a) => !this.meta.has(a),
+    ) as Address[];
+    if (cold.length) await this.hydrate(cold.slice(0, SEARCH_HYDRATE_LIMIT));
 
     const scored: Array<{ m: TokenMeta; score: number }> = [];
     for (const m of this.meta.values()) {
@@ -182,10 +323,22 @@ export class PoolIndexService implements OnModuleInit {
       .map((s) => s.m);
   }
 
-  /** Tokens with the most pools opened against them. Feeds the arena panel. */
+  /**
+   * Tokens with the most pools opened against them. Feeds the arena panel.
+   *
+   * Base assets are excluded, not just native ETH. WETH and USDG sit on one
+   * side of almost every pool by definition, so ranking by pool count put them
+   * permanently in the top two rows of a list nobody opens in order to buy
+   * dollars. They are the denominator, not the thing being traded.
+   */
   async hottest(limit = 12): Promise<TokenMeta[]> {
+    const excluded = new Set<string>([NATIVE_TOKEN.toLowerCase()]);
+    for (const base of Object.values(this.chain.network.baseTokens)) {
+      excluded.add(base.address.toLowerCase());
+    }
+
     const ranked = [...this.byToken.entries()]
-      .filter(([addr]) => addr !== NATIVE_TOKEN.toLowerCase())
+      .filter(([addr]) => !excluded.has(addr))
       .sort((a, b) => b[1].size - a[1].size)
       .slice(0, limit * 2)
       .map(([addr]) => addr as Address);

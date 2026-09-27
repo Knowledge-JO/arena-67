@@ -59,13 +59,58 @@ export function Product() {
 
               <StepCard
                 step={{
-                  kind: 'need_amount',
+                  kind: 'token_detail',
                   intentId: 'preview',
-                  symbol: 'ANIME',
-                  message: 'How much do you want to spend on ANIME?',
+                  token: {
+                    address: '0x0000000000000000000000000000000000000000',
+                    symbol: 'ANIME',
+                    name: 'ANIME FUN',
+                    decimals: 18,
+                    imageUrl: null,
+                    websites: [],
+                    socials: [{ url: 'https://x.com', label: 'twitter' }],
+                  },
+                  stats: {
+                    priceUsd: 0.00042,
+                    marketCap: 4_200_000,
+                    fdv: 4_200_000,
+                    volume24h: 318_000,
+                    priceChange24h: 12.4,
+                    buys24h: 1_204,
+                    sells24h: 987,
+                  },
+                  pools: [
+                    {
+                      poolId: '0xpreview-usdg',
+                      quoteSymbol: 'USDG',
+                      quoteAddress: '0x0000000000000000000000000000000000000000',
+                      liquidityUsd: 73_706,
+                      priceUsd: 0.00042,
+                      collapsed: 3,
+                      source: 'dexscreener',
+                    },
+                    {
+                      poolId: '0xpreview-eth',
+                      quoteSymbol: 'ETH',
+                      quoteAddress: '0x0000000000000000000000000000000000000000',
+                      liquidityUsd: 50_589,
+                      priceUsd: 0.00042,
+                      collapsed: 18,
+                      source: 'dexscreener',
+                    },
+                  ],
+                  degraded: false,
+                  message: 'ANIME trades on 2 venues. Which one?',
                 }}
                 onSelectToken={() => {}}
+                onSelectPool={() => router.push('/dashboard')}
+                onSubmitAmount={() => router.push('/dashboard')}
+                onSubmitPercent={() => router.push('/dashboard')}
                 onConfirm={() => {}}
+                onRequote={() => {}}
+                onPickToken={() => router.push('/dashboard')}
+                onAsk={() => router.push('/dashboard')}
+                onBuy={() => router.push('/dashboard')}
               />
 
               <Composer

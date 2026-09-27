@@ -41,6 +41,17 @@ export const TradeIntentSchema = z.object({
       'The numeric amount to spend (when buying) or sell. Omit if the user ' +
         'has not named an amount yet.',
     ),
+  percent: z
+    .number()
+    .positive()
+    .max(100)
+    .optional()
+    .describe(
+      'Size as a percentage of what the user holds of the asset being spent: ' +
+        'the token for a sell, the funding asset for a buy. "Sell all" / "max" ' +
+        '= 100, "half" = 50. Use instead of amount whenever the user gives a ' +
+        'share; never convert it to an amount yourself.',
+    ),
   currency: z
     .string()
     .trim()

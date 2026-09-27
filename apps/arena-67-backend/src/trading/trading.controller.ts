@@ -1,94 +1,114 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
-  Post,
   HttpCode,
-  BadRequestException,
+  Post,
+  UseGuards,
 } from '@nestjs/common';
 import { z } from 'zod';
 import { TradingService, type TradeStep } from './trading.service';
-import { WalletService } from '../wallet/wallet.service';
 import { TradeIntentSchema } from '../openserv/schemas';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { CurrentUser, type AuthedUser } from '../auth/current-user.decorator';
+import { UserWalletService } from '../accounts/user-wallet.service';
 
 /**
- * Session id is supplied by the caller and scopes every intent. It is the only
- * thing tying a follow-up turn to an in-flight trade, and the store checks it
- * on every read, so one session cannot drive another's trade.
- */
-const SessionBody = z.object({ sessionId: z.string().min(8) });
-
-/**
- * Turns a schema failure into a 400 naming the offending field.
- *
- * Calling `.parse` directly threw a raw ZodError, which Nest surfaced as a
- * blank 500 — an empty quoteId looked like the desk had fallen over rather
- * than like a malformed request.
+ * Turns a schema failure into a 400 naming the offending field, rather than a
+ * raw ZodError that Nest would surface as a blank 500.
  */
 function parse<T extends z.ZodTypeAny>(schema: T, body: unknown): z.infer<T> {
   const result = schema.safeParse(body);
   if (result.success) return result.data;
-  const detail = result.error.issues
-    .map((i) => `${i.path.join('.') || 'body'}: ${i.message}`)
-    .join('; ');
-  throw new BadRequestException(detail);
+  throw new BadRequestException(
+    result.error.issues.map((i) => `${i.path.join('.') || 'body'}: ${i.message}`).join('; '),
+  );
 }
 
-const BeginBody = SessionBody.extend({ intent: TradeIntentSchema });
-const SelectBody = SessionBody.extend({
+// No `sessionId` in any body. It used to come from the client, which meant the
+// caller chose whose trade it was acting on. The owner is now whoever the
+// verified token says it is, and nothing the client sends can change that.
+const BeginBody = z.object({ intent: TradeIntentSchema });
+const SelectBody = z.object({ intentId: z.string().uuid(), candidateId: z.string().uuid() });
+const AmountBody = z
+  .object({
+    intentId: z.string().uuid(),
+    amount: z.number().positive().optional(),
+    percent: z.number().positive().max(100).optional(),
+  })
+  .refine((b) => (b.amount == null) !== (b.percent == null), 'Give either an amount or a percent');
+const ConfirmBody = z.object({ intentId: z.string().uuid(), quoteId: z.string().uuid() });
+const SelectPoolBody = z.object({
   intentId: z.string().uuid(),
-  candidateId: z.string().uuid(),
+  poolId: z.string().regex(/^0x[a-fA-F0-9]{64}$/, 'Must be a 32-byte pool id'),
 });
-const AmountBody = SessionBody.extend({
-  intentId: z.string().uuid(),
-  amount: z.number().positive(),
-});
-const ConfirmBody = SessionBody.extend({
-  intentId: z.string().uuid(),
-  quoteId: z.string().uuid(),
-});
+const RequoteBody = z.object({ intentId: z.string().uuid() });
 
 @Controller('trade')
+@UseGuards(JwtAuthGuard)
 export class TradingController {
   constructor(
     private readonly trading: TradingService,
-    private readonly wallet: WalletService,
+    private readonly wallets: UserWalletService,
   ) {}
 
+  /** The caller's own wallet: where to deposit, and what it holds in ETH. */
   @Get('wallet')
-  wallet_() {
-    return {
-      address: this.wallet.addressOrNull,
-      available: this.wallet.available,
-      reason: this.wallet.unavailableReason,
-    };
+  async wallet(@CurrentUser() user: AuthedUser) {
+    const { address, eth } = await this.wallets.nativeBalance(user.id);
+    return { address, eth, available: true };
   }
 
   @Post('begin')
   @HttpCode(200)
-  begin(@Body() body: unknown): Promise<TradeStep> {
-    const { sessionId, intent } = parse(BeginBody, body);
-    return this.trading.begin(sessionId, intent);
+  begin(@CurrentUser() user: AuthedUser, @Body() body: unknown): Promise<TradeStep> {
+    const { intent } = parse(BeginBody, body);
+    return this.trading.begin(user.id, intent);
   }
 
   @Post('select-token')
   @HttpCode(200)
-  select(@Body() body: unknown): Promise<TradeStep> {
-    const { sessionId, intentId, candidateId } = parse(SelectBody, body);
-    return this.trading.selectToken(sessionId, intentId, candidateId);
+  select(@CurrentUser() user: AuthedUser, @Body() body: unknown): Promise<TradeStep> {
+    const { intentId, candidateId } = parse(SelectBody, body);
+    return this.trading.selectToken(user.id, intentId, candidateId);
   }
 
   @Post('amount')
   @HttpCode(200)
-  amount(@Body() body: unknown): Promise<TradeStep> {
-    const { sessionId, intentId, amount } = parse(AmountBody, body);
-    return this.trading.setAmount(sessionId, intentId, amount);
+  amount(@CurrentUser() user: AuthedUser, @Body() body: unknown): Promise<TradeStep> {
+    const { intentId, amount, percent } = parse(AmountBody, body);
+    return percent != null
+      ? this.trading.setPercent(user.id, intentId, percent)
+      : this.trading.setAmount(user.id, intentId, amount!);
   }
 
+  @Post('select-pool')
+  @HttpCode(200)
+  selectPool(@CurrentUser() user: AuthedUser, @Body() body: unknown): Promise<TradeStep> {
+    const { intentId, poolId } = parse(SelectPoolBody, body);
+    return this.trading.selectPool(user.id, intentId, poolId);
+  }
+
+  @Post('requote')
+  @HttpCode(200)
+  requote(@CurrentUser() user: AuthedUser, @Body() body: unknown): Promise<TradeStep> {
+    const { intentId } = parse(RequoteBody, body);
+    return this.trading.requote(user.id, intentId);
+  }
+
+  /**
+   * Signs. Deliberately unreachable from the MCP path: a model-driven request
+   * carries a user token, and signing must only ever follow a person clicking
+   * confirm in their own browser session.
+   */
   @Post('confirm')
   @HttpCode(200)
-  confirm(@Body() body: unknown): Promise<TradeStep> {
-    const { sessionId, intentId, quoteId } = parse(ConfirmBody, body);
-    return this.trading.confirm(sessionId, intentId, quoteId);
+  confirm(@CurrentUser() user: AuthedUser, @Body() body: unknown): Promise<TradeStep> {
+    if (user.via !== 'session') {
+      throw new BadRequestException('Trades are confirmed by the user in the app.');
+    }
+    const { intentId, quoteId } = parse(ConfirmBody, body);
+    return this.trading.confirm(user.id, intentId, quoteId);
   }
 }

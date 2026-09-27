@@ -95,6 +95,7 @@ export function BeatMarket() {
                 key={cycle}
                 summary={sample}
                 onConfirm={() => router.push('/dashboard')}
+                onRequote={() => router.push('/dashboard')}
               />
             </div>
             <p className="mt-3 px-1 font-ticker text-[11px] leading-relaxed text-ink-subtle">

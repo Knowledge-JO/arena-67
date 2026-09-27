@@ -11,6 +11,15 @@ export interface QuoteRequest {
   tokenOut: Address;
   amountIn: bigint;
   maxSlippageBps: number;
+  /**
+   * Quote this pool and nothing else.
+   *
+   * Once a user has picked a venue off the token page, racing every candidate
+   * and keeping the best fill is wrong: it could route through a pool with
+   * different depth and fees than the one they agreed to, and the confirm card
+   * would be describing a trade we are not making.
+   */
+  pool?: PoolRecord;
 }
 
 /** Quoting every pool for a hot pair is wasteful; the freshest few suffice. */
@@ -58,6 +67,16 @@ export class QuoteService {
   ) {}
 
   async quoteExactIn(req: QuoteRequest): Promise<Quote> {
+    if (req.pool) {
+      const only = await this.bestOf([req.pool], req);
+      if (!only) {
+        throw new Error(
+          'That pool cannot fill this size right now. Try a smaller amount or another pool.',
+        );
+      }
+      return this.build(only, req);
+    }
+
     // Indexed pools first: they are real, recent, and carry their own hooks.
     const indexed = this.index.poolsFor(req.tokenIn, req.tokenOut);
     let best = await this.bestOf(indexed.slice(0, MAX_POOLS_PROBED), req);
@@ -77,6 +96,13 @@ export class QuoteService {
       );
     }
 
+    return this.build(best, req);
+  }
+
+  private build(
+    best: { pool: PoolRecord; amountOut: bigint },
+    req: QuoteRequest,
+  ): Quote {
     const bps = BigInt(Math.round(req.maxSlippageBps));
     return {
       id: randomUUID(),
@@ -87,6 +113,7 @@ export class QuoteService {
       feeTier: best.pool.fee,
       tickSpacing: best.pool.tickSpacing,
       hooks: best.pool.hooks,
+      poolId: best.pool.id,
       quotedAt: Date.now(),
     };
   }

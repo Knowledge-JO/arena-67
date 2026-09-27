@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { TradeIntent } from '../openserv/schemas';
+import type { PoolRecord } from '../chain/pool-index.service';
+import type { TokenMarket } from '../market/market.types';
 
 export interface TokenCandidate {
   /** Opaque id the client echoes back. The raw address never round-trips. */
@@ -25,6 +27,8 @@ export interface Quote {
   feeTier: number;
   tickSpacing: number;
   hooks: `0x${string}`;
+  /** The venue this price came from; the swap must use this exact pool. */
+  poolId: string;
   quotedAt: number;
 }
 
@@ -39,16 +43,30 @@ export type IntentStatus =
 export interface PendingIntent {
   id: string;
   sessionId: string;
+  /**
+   * The mode this trade started in, fixed for its life. Confirm refuses a
+   * trade whose mode no longer matches the user's, so a paper trade can never
+   * be carried into a signature by flipping the switch.
+   */
+  mode: 'sandbox' | 'live';
   status: IntentStatus;
   action: 'buy' | 'sell';
   ticker?: string;
   amount?: number;
+  /** Size as a share (1–100) of the balance being spent; exclusive with amount. */
+  percent?: number;
   currency?: string;
   candidates?: TokenCandidate[];
   token?: TokenCandidate;
   /** The asset the quote was priced in; re-deriving it at confirm could differ. */
   funding?: { address: `0x${string}`; symbol: string; decimals: number };
+  /** Venue chosen on the token page, if any. Pinned through to the swap. */
+  pool?: PoolRecord;
+  /** Market view backing the token page, cached for the session. */
+  market?: TokenMarket;
   quote?: Quote;
+  /** The token's own transfer tax, measured at quote time. Null: unknown. */
+  transferTax?: import('../chain/transfer-tax.service').TransferTax | null;
   txHash?: `0x${string}`;
   error?: string;
   createdAt: number;
@@ -77,15 +95,17 @@ export class PendingIntentStore {
   private readonly log = new Logger(PendingIntentStore.name);
   private readonly intents = new Map<string, PendingIntent>();
 
-  create(sessionId: string, intent: TradeIntent): PendingIntent {
+  create(sessionId: string, intent: TradeIntent, mode: 'sandbox' | 'live' = 'sandbox'): PendingIntent {
     const now = Date.now();
     const pending: PendingIntent = {
       id: randomUUID(),
       sessionId,
+      mode,
       status: 'collecting',
       action: intent.action,
       ticker: intent.ticker,
       amount: intent.amount,
+      percent: intent.percent,
       currency: intent.currency,
       createdAt: now,
       updatedAt: now,
