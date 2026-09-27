@@ -138,7 +138,10 @@ export function TrendingPane({
     <aside className="flex h-full flex-col border-l border-border-base bg-surface/40">
       <header className="px-4 pb-2 pt-3.5">
         <div className="flex items-center justify-between gap-3">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-muted">Trending</h2>
+          <div className="flex items-center gap-1.5">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-muted">Trending</h2>
+            <Refreshing failed={failed} />
+          </div>
           <div role="tablist" aria-label="Which tokens to show" className="flex rounded-lg bg-surface-raised p-0.5">
             {VIEWS.map((v) => (
               <button
@@ -268,5 +271,24 @@ function Row({
         </div>
       </div>
     </motion.button>
+  );
+}
+
+/**
+ * Tells people the list keeps itself fresh: a slow loop while polling works,
+ * a still amber dot when the last refresh failed (it keeps retrying).
+ */
+function Refreshing({ failed }: { failed: boolean }) {
+  const label = failed
+    ? 'Couldn’t refresh just now — retrying'
+    : `Live — refreshes every ${POLL_MS / 1000} seconds`;
+  return (
+    <span role="status" aria-label={label} title={label} className="inline-flex h-3 w-3 items-center justify-center">
+      {failed ? (
+        <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+      ) : (
+        <Loader2 size={12} className="text-positive motion-safe:animate-[spin_1.6s_linear_infinite]" aria-hidden="true" />
+      )}
+    </span>
   );
 }
