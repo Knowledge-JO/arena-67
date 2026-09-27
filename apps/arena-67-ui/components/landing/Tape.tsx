@@ -1,10 +1,11 @@
 'use client';
 
+import { usdCompact } from '@/lib/format';
 import { useTrending } from '@/lib/use-trending';
 
 /**
- * The market tape. Symbols are the real index leaders from the desk when it is
- * reachable; when the backend is down the tape carries the platform words
+ * The market tape: the most traded tokens over 24h, with their volume, when
+ * the desk is reachable; when the backend is down the tape carries the platform words
  * instead of inventing tokens.
  */
 export function Tape() {
@@ -14,7 +15,7 @@ export function Tape() {
 
   const cells = offline
     ? ['ARENA 67', 'ROBINHOOD CHAIN', 'UNISWAP V4']
-    : tokens.slice(0, 12).map((t) => `${t.symbol} · ${t.poolCount} pools`);
+    : tokens.slice(0, 12).map((t) => `${t.symbol} · ${usdCompact(t.volume24h)} 24h vol`);
 
   return (
     <div className="overflow-hidden border-y border-line bg-paper">

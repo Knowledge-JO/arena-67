@@ -87,6 +87,8 @@ export class VolumeService implements OnModuleInit {
         this.cursor = from - 1n;
         await this.advance(head);
         this.log.log(`swap activity warm — ${this.poolCount()} active pools`);
+        // Anything ranked during the backfill saw only part of it.
+        this.rankings.clear();
         await this.track();
         // The sidebar's other windows, so its first view does not wait.
         await this.ranking('h1').catch(() => undefined);

@@ -6,6 +6,7 @@ import {
   getTrending,
   searchTokens,
 } from '../../api/arena/api.arena.js';
+import type { TrendingSnapshot } from '../../api/arena/types.js';
 import { toolError, toolSuccess } from '../shared/responses.js';
 
 const EVM_ADDRESS = /^0x[a-fA-F0-9]{40}$/;
@@ -110,26 +111,37 @@ export function registerResearchTools(server: McpServer, api: AxiosInstance) {
     {
       title: 'List trending tokens',
       description:
-        'Newly active tokens, ranked by how many pools were opened against each ' +
-        'recently. This ranks new-pool activity, not volume. For "what is trading ' +
-        'the most" use get_top_volume_tokens instead.',
+        'The 12 most traded tokens on Robinhood Chain over the last 24 hours, by ' +
+        'dollar volume — the same list the app shows as trending. For another ' +
+        'window (1h, 6h), more tokens, or the ranked card with a follow-up on ' +
+        'holders, use get_top_volume_tokens instead.',
       inputSchema: {},
     },
     async () => {
       try {
         const snap = await getTrending(api);
         return toolSuccess({
+          window: snap.window,
           tokens: snap.tokens,
-          indexedPools: snap.index.pools,
-          indexedTokens: snap.index.tokens,
+          observedMinutes: snap.observedMinutes,
           stale: snap.stale,
-          note: snap.stale
-            ? 'This snapshot is stale; the backend has not refreshed recently.'
-            : undefined,
+          note: trendingNote(snap),
         });
       } catch (error) {
         return toolError(error);
       }
     },
   );
+}
+
+/** Caveats the model should pass on, if any. */
+export function trendingNote(snap: TrendingSnapshot): string | undefined {
+  if (snap.stale) return 'This list is stale; the backend has not refreshed it recently.';
+  if (snap.observedMinutes < 1440) {
+    return (
+      `The backend has only watched ${snap.observedMinutes} minutes of trading so far, ` +
+      'so only tokens traded in that time are ranked. Volume figures themselves are full 24h totals.'
+    );
+  }
+  return undefined;
 }

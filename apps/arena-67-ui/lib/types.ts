@@ -302,12 +302,11 @@ export interface TradeIntent {
   currency?: string;
 }
 
+/** One of the most traded tokens over 24h — the landing page's board. */
 export interface TrendingToken {
   address: string;
   symbol: string;
   name: string;
-  decimals: number;
-  poolCount: number;
   priceUsd: number | null;
   priceChange24h: number | null;
   volume24h: number | null;
@@ -347,7 +346,9 @@ export interface SidebarList {
 
 export interface TrendingSnapshot {
   index: { ready: boolean; pools: number; tokens: number; hydrated: number; lastBlock: string };
+  window: 'h24';
   tokens: TrendingToken[];
+  observedMinutes: number;
   lastRefresh: number;
   stale: boolean;
   error: string | null;

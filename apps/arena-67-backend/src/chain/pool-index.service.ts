@@ -324,32 +324,6 @@ export class PoolIndexService implements OnModuleInit {
   }
 
   /**
-   * Tokens with the most pools opened against them. Feeds the arena panel.
-   *
-   * Base assets are excluded, not just native ETH. WETH and USDG sit on one
-   * side of almost every pool by definition, so ranking by pool count put them
-   * permanently in the top two rows of a list nobody opens in order to buy
-   * dollars. They are the denominator, not the thing being traded.
-   */
-  async hottest(limit = 12): Promise<TokenMeta[]> {
-    const excluded = new Set<string>([NATIVE_TOKEN.toLowerCase()]);
-    for (const base of Object.values(this.chain.network.baseTokens)) {
-      excluded.add(base.address.toLowerCase());
-    }
-
-    const ranked = [...this.byToken.entries()]
-      .filter(([addr]) => !excluded.has(addr))
-      .sort((a, b) => b[1].size - a[1].size)
-      .slice(0, limit * 2)
-      .map(([addr]) => addr as Address);
-    await this.hydrate(ranked);
-    return ranked
-      .map((a) => this.meta.get(a.toLowerCase()))
-      .filter((m): m is TokenMeta => !!m)
-      .slice(0, limit);
-  }
-
-  /**
    * Tokens by their most recent pool opening, newest first — candidates for
    * "new tokens". ETH and the dollar bases are the other side, not the token.
    * A fresh pool for an old token lands here too; the caller checks age.

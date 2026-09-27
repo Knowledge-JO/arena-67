@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { type AxiosInstance } from 'axios';
 import { getTrending, getWallet } from '../../api/arena/api.arena.js';
 import { resourceContents } from '../shared/responses.js';
+import { trendingNote } from './tools.js';
 
 /**
  * Resources: state the model can read without deciding to "do" anything.
@@ -19,17 +20,18 @@ export function registerResearchResources(server: McpServer, api: AxiosInstance)
     {
       title: 'Trending tokens on Robinhood Chain',
       description:
-        'Tokens with the most recent pool activity, with price, 24h change ' +
-        'and volume where a market exists. Ranked by pool count, not volume.',
+        'The most traded tokens over the last 24 hours, by dollar volume, with ' +
+        'price, 24h change, market cap and launch time where a market exists.',
       mimeType: 'application/json',
     },
     async (uri) => {
       const snap = await getTrending(api);
       return resourceContents(uri, {
+        window: snap.window,
         tokens: snap.tokens,
-        indexedPools: snap.index.pools,
-        indexedTokens: snap.index.tokens,
+        observedMinutes: snap.observedMinutes,
         stale: snap.stale,
+        note: trendingNote(snap),
       });
     },
   );
