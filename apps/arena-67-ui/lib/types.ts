@@ -317,6 +317,34 @@ export interface TrendingToken {
   imageUrl: string | null;
 }
 
+/** Which list the dashboard sidebar shows: most traded over a window, or new launches. */
+export type SidebarView = 'h1' | 'h6' | 'h24' | 'new';
+
+export interface SidebarToken {
+  address: string;
+  symbol: string;
+  name: string;
+  imageUrl: string | null;
+  priceUsd: number | null;
+  marketCap: number | null;
+  liquidityUsd: number | null;
+  /** Over the list's window; 24h for new tokens. */
+  volumeUsd: number | null;
+  priceChangePct: number | null;
+  /** When its first trading pool opened (epoch ms). */
+  launchedAt: number | null;
+}
+
+export interface SidebarList {
+  view: SidebarView;
+  tokens: SidebarToken[];
+  /** How many the list holds in all; "load more" stops here. */
+  total: number;
+  /** Volume lists: minutes of trading seen so far. Below the window, the list is still filling. */
+  observedMinutes: number | null;
+  asOf: string;
+}
+
 export interface TrendingSnapshot {
   index: { ready: boolean; pools: number; tokens: number; hydrated: number; lastBlock: string };
   tokens: TrendingToken[];

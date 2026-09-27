@@ -83,4 +83,8 @@ export interface TokenVolume {
   liquidityUsd: number | null;
   volumeUsd: Windowed;
   priceChange24h: number | null;
+  /** Price change over each window, in percent. */
+  priceChange: Windowed;
+  /** Earliest pool creation Dexscreener knows of, epoch ms — its launch, in practice. */
+  firstPoolAt: number | null;
 }

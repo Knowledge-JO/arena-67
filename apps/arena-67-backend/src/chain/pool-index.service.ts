@@ -349,6 +349,31 @@ export class PoolIndexService implements OnModuleInit {
       .slice(0, limit);
   }
 
+  /**
+   * Tokens by their most recent pool opening, newest first — candidates for
+   * "new tokens". ETH and the dollar bases are the other side, not the token.
+   * A fresh pool for an old token lands here too; the caller checks age.
+   */
+  recentTokens(limit: number): Address[] {
+    const excluded = new Set<string>([NATIVE_TOKEN.toLowerCase()]);
+    for (const base of Object.values(this.chain.network.baseTokens)) {
+      excluded.add(base.address.toLowerCase());
+    }
+    const newest = [...this.pools.values()].sort((p, q) => (q.block > p.block ? 1 : q.block < p.block ? -1 : 0));
+    const out: Address[] = [];
+    const seen = new Set<string>();
+    for (const p of newest) {
+      for (const t of [p.currency0, p.currency1]) {
+        const k = t.toLowerCase();
+        if (excluded.has(k) || seen.has(k)) continue;
+        seen.add(k);
+        out.push(t);
+      }
+      if (out.length >= limit) break;
+    }
+    return out.slice(0, limit);
+  }
+
   /** Batch-reads ERC-20 metadata through Multicall3, caching as it goes. */
   private async hydrate(tokens: Address[]): Promise<void> {
     const todo = tokens.filter(
