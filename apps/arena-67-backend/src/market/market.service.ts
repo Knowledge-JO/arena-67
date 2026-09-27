@@ -260,6 +260,8 @@ export class MarketService {
         liquidityUsd: o.liquidityUsd,
         volumeUsd: o.volumeUsd,
         priceChange24h: o.priceChange.h24,
+        priceChange: o.priceChange,
+        firstPoolAt: o.firstPoolAt,
       });
     }
     return out;

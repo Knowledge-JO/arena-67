@@ -29,10 +29,14 @@ const TOKENS_TO_RANK = 90;
 const RANKING_TTL_MS = 3 * 60_000;
 /** The top tokens by 24h volume are kept holder-indexed ahead of anyone asking. */
 const TRACK_TOP = 20;
+/** Most a caller can page to. */
+export const RANKING_MAX = 50;
 
 export interface VolumeRanking {
   window: VolumeWindow;
   tokens: Array<TokenVolume & { rank: number }>;
+  /** Tokens ranked in all, before `limit` — what "load more" can reach. */
+  total: number;
   /** Minutes of swap activity actually observed. Candidates come only from these. */
   observedMinutes: number;
   asOf: string;
@@ -84,6 +88,9 @@ export class VolumeService implements OnModuleInit {
         await this.advance(head);
         this.log.log(`swap activity warm — ${this.poolCount()} active pools`);
         await this.track();
+        // The sidebar's other windows, so its first view does not wait.
+        await this.ranking('h1').catch(() => undefined);
+        await this.ranking('h6').catch(() => undefined);
       } catch (err) {
         this.log.warn(`swap backfill failed, tail will retry: ${(err as Error).message.split('\n')[0]}`);
       }
@@ -162,19 +169,31 @@ export class VolumeService implements OnModuleInit {
     return [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
   }
 
-  /** Top tokens by USD volume over the window. Cached a few minutes. */
+  /**
+   * Top tokens by USD volume over the window. Cached a few minutes; once a
+   * ranking exists, an expired one is served while the next is computed, so
+   * only the very first ask for a window waits on Dexscreener.
+   */
   async ranking(window: VolumeWindow = 'h24', limit = 10): Promise<VolumeRanking> {
     const hit = this.rankings.get(window);
-    const fresh = hit && Date.now() - hit.at < RANKING_TTL_MS ? hit.value : null;
-    const value =
-      fresh ??
-      (await (this.inflight.get(window) ??
-        (() => {
-          const work = this.compute(window).finally(() => this.inflight.delete(window));
-          this.inflight.set(window, work);
-          return work;
-        })()));
-    return { ...value, tokens: value.tokens.slice(0, Math.min(Math.max(limit, 1), 50)) };
+    const fresh = hit && Date.now() - hit.at < RANKING_TTL_MS;
+    let value: VolumeRanking;
+    if (hit && fresh) value = hit.value;
+    else if (hit) {
+      void this.recompute(window).catch((err: Error) =>
+        this.log.warn(`volume ranking refresh failed, serving previous: ${err.message.split('\n')[0]}`),
+      );
+      value = hit.value;
+    } else value = await this.recompute(window);
+    return { ...value, tokens: value.tokens.slice(0, Math.min(Math.max(limit, 1), RANKING_MAX)) };
+  }
+
+  private recompute(window: VolumeWindow): Promise<VolumeRanking> {
+    const running = this.inflight.get(window);
+    if (running) return running;
+    const work = this.compute(window).finally(() => this.inflight.delete(window));
+    this.inflight.set(window, work);
+    return work;
   }
 
   private async compute(window: VolumeWindow): Promise<VolumeRanking> {
@@ -212,6 +231,7 @@ export class VolumeService implements OnModuleInit {
     const value: VolumeRanking = {
       window,
       tokens: ranked,
+      total: Math.min(ranked.length, RANKING_MAX),
       observedMinutes: this.observedMinutes(),
       asOf: new Date().toISOString(),
     };

@@ -12,6 +12,8 @@ import type {
   TradeStep,
   TradingMode,
   TrendingSnapshot,
+  SidebarList,
+  SidebarView,
 } from './types';
 
 const BASE =
@@ -148,6 +150,11 @@ export const api = {
     post<HolderOverlap>('/research/common-holders', body),
 
   // --- research (public)
+  sidebar: async (view: SidebarView, limit: number): Promise<SidebarList> => {
+    const r = await raw(`/research/sidebar?view=${view}&limit=${limit}`, { cache: 'no-store' });
+    if (!r.ok) throw new ApiError('Could not load tokens.');
+    return r.json();
+  },
   trending: async (): Promise<TrendingSnapshot> => {
     const r = await raw('/research/trending', { cache: 'no-store' });
     if (!r.ok) throw new ApiError('Could not load trending tokens.');
