@@ -11,6 +11,7 @@ import { TokenChoices } from './TokenChoices';
 import { PortfolioCard } from '../account/PortfolioCard';
 import { TokenReportCard } from '../research/TokenReportCard';
 import { TopTokensCard } from '../research/TopTokensCard';
+import { NewTokensCard } from '../research/NewTokensCard';
 import { HolderOverlapCard } from '../research/HolderOverlapCard';
 import { WalletHoldingsCard } from '../research/WalletHoldingsCard';
 import type { TradeStep } from '@/lib/types';
@@ -22,7 +23,14 @@ import type { TradeStep } from '@/lib/types';
  * drops the text altogether: it updates live, and a comment written once goes
  * stale ("ready to sell U?" after U is sold).
  */
-export const CARD_OWNS_NOTE = new Set(['portfolio', 'token_report', 'top_tokens', 'holder_overlap', 'wallet_holdings']);
+export const CARD_OWNS_NOTE = new Set([
+  'portfolio',
+  'token_report',
+  'top_tokens',
+  'new_tokens',
+  'holder_overlap',
+  'wallet_holdings',
+]);
 
 /**
  * Renders one reply from the desk. Every trade step lands in the transcript as
@@ -130,6 +138,10 @@ export function StepCard({
 
           {step.kind === 'top_tokens' && (
             <TopTokensCard data={step} onPickToken={onPickToken} onAsk={onAsk} disabled={busy} note={note} />
+          )}
+
+          {step.kind === 'new_tokens' && (
+            <NewTokensCard data={step} onPickToken={onPickToken} disabled={busy} note={note} />
           )}
 
           {step.kind === 'holder_overlap' && (

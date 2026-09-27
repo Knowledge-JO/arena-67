@@ -67,6 +67,9 @@ export class PoolIndexService implements OnModuleInit {
   private readonly resolved = new Map<string, PoolRecord | null>();
   private lastBlock = 0n;
   private ready = false;
+  private markReady!: () => void;
+  /** Settles when the first backfill finishes. Until then the index holds only the oldest pools. */
+  private readonly readyPromise = new Promise<void>((resolve) => (this.markReady = resolve));
 
   constructor(
     private readonly chain: ChainService,
@@ -98,6 +101,7 @@ export class PoolIndexService implements OnModuleInit {
     void this.scan(head - span, head)
       .then(async () => {
         this.ready = true;
+        this.markReady();
         this.log.log(
           `pool index ready — ${this.pools.size} pools, ${this.byToken.size} tokens`,
         );
@@ -323,30 +327,14 @@ export class PoolIndexService implements OnModuleInit {
       .map((s) => s.m);
   }
 
-  /**
-   * Tokens with the most pools opened against them. Feeds the arena panel.
-   *
-   * Base assets are excluded, not just native ETH. WETH and USDG sit on one
-   * side of almost every pool by definition, so ranking by pool count put them
-   * permanently in the top two rows of a list nobody opens in order to buy
-   * dollars. They are the denominator, not the thing being traded.
-   */
-  async hottest(limit = 12): Promise<TokenMeta[]> {
-    const excluded = new Set<string>([NATIVE_TOKEN.toLowerCase()]);
-    for (const base of Object.values(this.chain.network.baseTokens)) {
-      excluded.add(base.address.toLowerCase());
-    }
-
-    const ranked = [...this.byToken.entries()]
-      .filter(([addr]) => !excluded.has(addr))
-      .sort((a, b) => b[1].size - a[1].size)
-      .slice(0, limit * 2)
-      .map(([addr]) => addr as Address);
-    await this.hydrate(ranked);
-    return ranked
-      .map((a) => this.meta.get(a.toLowerCase()))
-      .filter((m): m is TokenMeta => !!m)
-      .slice(0, limit);
+  /** Waits for the first backfill, up to `timeoutMs`. True if the index is ready. */
+  async whenReady(timeoutMs: number): Promise<boolean> {
+    if (this.ready) return true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => (timer = setTimeout(resolve, timeoutMs)));
+    await Promise.race([this.readyPromise, timeout]);
+    clearTimeout(timer);
+    return this.ready;
   }
 
   /**

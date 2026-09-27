@@ -60,15 +60,17 @@ export interface TokenSearchResult {
   results: TokenCandidate[];
 }
 
+/** One of the most traded tokens over 24h, by dollar volume. */
 export interface TrendingToken {
   address: string;
   symbol: string;
   name: string;
-  decimals: number;
-  poolCount: number;
   priceUsd: number | null;
   priceChange24h: number | null;
   volume24h: number | null;
+  marketCap: number | null;
+  /** When its first trading pool opened (epoch ms). */
+  launchedAt: number | null;
   imageUrl: string | null;
 }
 
@@ -80,7 +82,10 @@ export interface TrendingSnapshot {
     hydrated: number;
     lastBlock: string;
   };
+  window: 'h24';
   tokens: TrendingToken[];
+  /** Minutes of swaps the backend has seen; under 1440, only tokens traded in them are ranked. */
+  observedMinutes: number;
   lastRefresh: number;
   stale: boolean;
   error: string | null;

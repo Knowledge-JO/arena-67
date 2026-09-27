@@ -182,6 +182,16 @@ export interface TopTokens {
   asOf: string;
 }
 
+/** Just-launched tokens with liquidity, as a chat card. */
+export interface NewTokens {
+  kind: 'new_tokens';
+  tokens: SidebarToken[];
+  total: number;
+  maxAgeHours: number;
+  minLiquidityUsd: number;
+  asOf: string;
+}
+
 export interface OverlapToken {
   address: string;
   symbol: string;
@@ -231,6 +241,7 @@ export type TradeStep =
   | Portfolio
   | TokenReport
   | TopTokens
+  | NewTokens
   | HolderOverlap
   | WalletHoldings
   | { kind: 'need_token'; intentId: string; ticker?: string; message: string }
@@ -302,12 +313,11 @@ export interface TradeIntent {
   currency?: string;
 }
 
+/** One of the most traded tokens over 24h — the landing page's board. */
 export interface TrendingToken {
   address: string;
   symbol: string;
   name: string;
-  decimals: number;
-  poolCount: number;
   priceUsd: number | null;
   priceChange24h: number | null;
   volume24h: number | null;
@@ -347,7 +357,9 @@ export interface SidebarList {
 
 export interface TrendingSnapshot {
   index: { ready: boolean; pools: number; tokens: number; hydrated: number; lastBlock: string };
+  window: 'h24';
   tokens: TrendingToken[];
+  observedMinutes: number;
   lastRefresh: number;
   stale: boolean;
   error: string | null;

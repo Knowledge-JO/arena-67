@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { usdCompact } from '@/lib/format';
 import { useTrending } from '@/lib/use-trending';
 import { Reveal } from './Reveal';
 
@@ -59,7 +60,7 @@ export function PaintMarket() {
                   Trending now
                 </span>
                 <span className="font-ticker text-[11px] uppercase tracking-[0.14em] text-ink-subtle">
-                  {live ? 'live index' : 'offline'}
+                  {live ? '24h volume' : 'offline'}
                 </span>
               </div>
 
@@ -86,7 +87,7 @@ export function PaintMarket() {
               {tokens?.length === 0 && (
                 <div className="px-6 py-10">
                   <p className="text-sm leading-relaxed text-ink-muted">
-                    No tokens indexed yet.
+                    No trading seen yet. The board fills in within a minute or two.
                   </p>
                 </div>
               )}
@@ -108,7 +109,7 @@ export function PaintMarket() {
                           </span>
                         </span>
                         <span className="shrink-0 font-ticker text-xs tabular-nums text-ink-muted">
-                          {t.poolCount} {t.poolCount === 1 ? 'pool' : 'pools'}
+                          {usdCompact(t.volume24h)}
                         </span>
                       </Link>
                     </li>

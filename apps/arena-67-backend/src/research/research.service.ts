@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PoolIndexService } from '../chain/pool-index.service';
 import { MarketService } from '../market/market.service';
@@ -9,8 +9,6 @@ export interface TrendingToken {
   address: string;
   symbol: string;
   name: string;
-  decimals: number;
-  poolCount: number;
   /** Null rather than zero when market data is unavailable. */
   priceUsd: number | null;
   priceChange24h: number | null;
@@ -21,8 +19,8 @@ export interface TrendingToken {
   imageUrl: string | null;
 }
 
-/** How many tokens get a market lookup. Each is one upstream request. */
-const ENRICH = 12;
+/** How many tokens the landing page and the trending tool get. */
+const TRENDING = 12;
 
 /** One row of the dashboard sidebar, whichever list it is in. */
 export interface SidebarToken {
@@ -58,29 +56,31 @@ export interface SidebarList {
 /** Tokens with a recent pool, checked against the market for age and liquidity. Five requests. */
 const NEW_CANDIDATES = 150;
 /** Older than this, a token with a fresh pool is not new. */
-const NEW_MAX_AGE_MS = 48 * 3_600_000;
+export const NEW_MAX_AGE_HOURS = 48;
+const NEW_MAX_AGE_MS = NEW_MAX_AGE_HOURS * 3_600_000;
 /** "Liquidity already added": at least this much in its pools. */
-const NEW_MIN_LIQUIDITY_USD = 1_000;
+export const NEW_MIN_LIQUIDITY_USD = 1_000;
 const NEW_TTL_MS = 60_000;
 export const SIDEBAR_MAX = RANKING_MAX;
 
 /**
  * The research half of the arena: what is moving on Robinhood Chain.
  *
- * Ranking is by pool count within the index window, which is a proxy for
- * activity rather than volume — honest, because it comes straight from chain
- * state, but it rewards many thin pools as much as one deep one. Price and
- * volume are layered on from the market service so the pane shows numbers
- * traders actually recognise.
+ * "Trending" is the most traded tokens over the last 24 hours by dollar
+ * volume — the volume ranking, shared by the landing page, the agent's
+ * trending tool and the sidebar's 24h tab. It used to be pool count, which
+ * rewarded a deployer opening five empty pools as much as one deep market.
  *
- * Every enriched field is nullable. A token minted minutes ago has no price
- * anywhere, and rendering that as `$0` would be a lie the UI cannot detect.
+ * Every market field is nullable. A token minted minutes ago may have no
+ * price anywhere, and rendering that as `$0` would be a lie the UI cannot
+ * detect.
  */
 @Injectable()
 export class ResearchService implements OnModuleInit {
   private readonly log = new Logger(ResearchService.name);
   private trending: TrendingToken[] = [];
   private lastRefresh = 0;
+  private observedMinutes = 0;
   private lastError: string | null = null;
 
   private newList: { at: number; value: SidebarList } | null = null;
@@ -116,21 +116,36 @@ export class ResearchService implements OnModuleInit {
   @Cron(CronExpression.EVERY_MINUTE)
   async refresh(): Promise<void> {
     try {
-      const next = await this.fetchTopTraded();
-      this.trending = next;
+      const r = await this.volume.ranking('h24', TRENDING);
+      this.trending = r.tokens.map((t) => ({
+        address: t.address,
+        symbol: t.symbol,
+        name: t.name,
+        priceUsd: t.priceUsd,
+        priceChange24h: t.priceChange24h,
+        volume24h: t.volumeUsd.h24,
+        marketCap: t.marketCap,
+        launchedAt: t.firstPoolAt,
+        imageUrl: t.imageUrl,
+      }));
+      this.observedMinutes = r.observedMinutes;
       this.lastRefresh = Date.now();
       this.lastError = null;
-      this.log.debug(`trending refreshed: ${next.length} tokens`);
+      this.log.debug(`trending refreshed: ${this.trending.length} tokens`);
     } catch (err) {
       this.lastError = (err as Error).message;
       this.log.warn(`trending refresh failed, serving stale: ${this.lastError}`);
     }
   }
 
+  /** Top tokens by 24h volume, for the landing page and the trending tool. */
   snapshot() {
     return {
       index: this.index.stats(),
+      window: 'h24' as const,
       tokens: this.trending,
+      /** Minutes of swaps seen so far; under 1440, only tokens traded in them are ranked. */
+      observedMinutes: this.observedMinutes,
       lastRefresh: this.lastRefresh,
       stale: Date.now() - this.lastRefresh > 5 * 60_000,
       error: this.lastError,
@@ -180,6 +195,11 @@ export class ResearchService implements OnModuleInit {
   }
 
   private async computeNew(): Promise<SidebarList> {
+    // The backfill reads oldest blocks first. Before it finishes, the "most
+    // recent" pools are hours old and the newest launches are missing.
+    if (!(await this.index.whenReady(60_000))) {
+      throw new ServiceUnavailableException('Still reading recent launches from the chain. Try again in a moment.');
+    }
     const candidates = this.index.recentTokens(NEW_CANDIDATES);
     const now = Date.now();
     const found = (await this.market.volumes(candidates))
@@ -200,53 +220,6 @@ export class ResearchService implements OnModuleInit {
     };
     this.newList = { at: Date.now(), value };
     return value;
-  }
-
-  private async fetchTopTraded(): Promise<TrendingToken[]> {
-    const hot = await this.index.hottest(ENRICH);
-
-    // Enrichment runs in parallel and is allowed to fail per-token: one
-    // unknown contract must not blank the whole pane.
-    const enriched = await Promise.all(
-      hot.map(async (t) => {
-        const base: TrendingToken = {
-          address: t.address,
-          symbol: t.symbol,
-          name: t.name,
-          decimals: t.decimals,
-          poolCount: t.poolCount,
-          priceUsd: null,
-          priceChange24h: null,
-          volume24h: null,
-          marketCap: null,
-          launchedAt: null,
-          imageUrl: null,
-        };
-        try {
-          // Both read the same cached pairs; no extra upstream request.
-          const [m, overview] = await Promise.all([
-            this.market.forToken(t.address),
-            this.market.overview(t.address).catch(() => null),
-          ]);
-          if (!m) return base;
-          return {
-            ...base,
-            symbol: m.symbol || base.symbol,
-            name: m.name || base.name,
-            priceUsd: m.stats?.priceUsd ?? null,
-            priceChange24h: m.stats?.priceChange24h ?? null,
-            volume24h: m.stats?.volume24h ?? null,
-            marketCap: m.stats?.marketCap ?? null,
-            launchedAt: overview?.firstPoolAt ?? null,
-            imageUrl: m.imageUrl,
-          };
-        } catch {
-          return base;
-        }
-      }),
-    );
-
-    return enriched;
   }
 }
 

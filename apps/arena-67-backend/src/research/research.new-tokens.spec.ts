@@ -27,8 +27,12 @@ function token(address: string, hoursOld: number | null, liquidityUsd: number | 
   };
 }
 
-function service(volumes: TokenVolume[]) {
-  const index = { recentTokens: jest.fn(() => volumes.map((v) => v.address)), stats: () => ({ ready: false }) };
+function service(volumes: TokenVolume[], ready = true) {
+  const index = {
+    recentTokens: jest.fn(() => volumes.map((v) => v.address)),
+    stats: () => ({ ready: false }),
+    whenReady: jest.fn(async () => ready),
+  };
   const market = { volumes: jest.fn(async () => volumes) };
   const svc = new ResearchService(index as never, market as never, {} as never);
   return { svc, market };
@@ -59,5 +63,11 @@ describe('ResearchService.newTokens', () => {
     expect(more.tokens).toHaveLength(20);
     expect(more.total).toBe(20);
     expect(market.volumes).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses to list from a half-read pool index rather than show hours-old tokens as new', async () => {
+    const { svc, market } = service([token('0xaaa1', 1, 5_000)], false);
+    await expect(svc.newTokens(12)).rejects.toThrow('Still reading recent launches');
+    expect(market.volumes).not.toHaveBeenCalled();
   });
 });

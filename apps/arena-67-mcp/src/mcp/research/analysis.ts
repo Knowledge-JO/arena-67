@@ -6,6 +6,7 @@ import {
   getTokenReport,
   getTopHolders,
   getTopVolume,
+  getNewTokens,
   getWalletHoldings,
 } from '../../api/arena/api.arena.js';
 import { toolError, toolSuccess } from '../shared/responses.js';
@@ -69,6 +70,30 @@ export function registerAnalysisTools(server: McpServer, api: AxiosInstance) {
     async ({ address: a, limit, include }) => {
       try {
         return toolSuccess(await getTopHolders(api, a, { limit, include }));
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'list_new_tokens',
+    {
+      title: 'Newly launched tokens',
+      description:
+        'Tokens that just launched on Robinhood Chain and can already be traded: ' +
+        'first pool opened in the last 48 hours with at least $1,000 of liquidity, ' +
+        'newest first. Use for "what just launched", "new tokens", "fresh ' +
+        'launches". Same list as the app\'s New tab. Several tokens can share a ' +
+        'symbol — tell them apart by address. New tokens are high risk; state ' +
+        'facts, never recommend buying.',
+      inputSchema: {
+        limit: z.number().int().min(1).max(20).optional().describe('How many (default 10).'),
+      },
+    },
+    async ({ limit }) => {
+      try {
+        return toolSuccess(await getNewTokens(api, { limit }));
       } catch (error) {
         return toolError(error);
       }

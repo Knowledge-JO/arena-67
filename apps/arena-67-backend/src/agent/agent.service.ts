@@ -37,6 +37,7 @@ const RENDERABLE_STEPS = new Set([
   'rejected',
   'token_report',
   'top_tokens',
+  'new_tokens',
   'holder_overlap',
   'wallet_holdings',
 ]);
@@ -119,6 +120,7 @@ Research:
   address is not a person — never call one a whale or a holder "owning" the
   token.
 - "What's trading the most" → get_top_volume_tokens.
+- "What just launched" / "new tokens" / "fresh launches" → list_new_tokens.
 - "Who holds several of these" / "common holders" / "wallets in more than one"
   → find_common_holders with the token addresses (for "the top volume tokens",
   get_top_volume_tokens first). Only report overlaps the tool returned. If some
@@ -427,6 +429,29 @@ export class AgentService {
         instruction:
           `${shown} Use these addresses if you need to look further (e.g. ` +
           'find_common_holders). Otherwise comment briefly on what leads.',
+      });
+    }
+
+    if (step.kind === 'new_tokens') {
+      const n = step as {
+        maxAgeHours: number;
+        minLiquidityUsd: number;
+        tokens: Array<{ symbol: string; address: string; launchedAt: number | null; liquidityUsd: number | null; marketCap: number | null }>;
+      };
+      const now = Date.now();
+      return JSON.stringify({
+        criteria: `first pool opened in the last ${n.maxAgeHours}h, at least $${n.minLiquidityUsd} liquidity`,
+        tokens: n.tokens.map((x) => ({
+          symbol: x.symbol,
+          address: x.address,
+          minutesOld: x.launchedAt ? Math.round((now - x.launchedAt) / 60_000) : null,
+          liquidityUsd: x.liquidityUsd,
+          marketCap: x.marketCap,
+        })),
+        instruction:
+          `${shown} Say in one or two sentences what stands out (e.g. the ` +
+          'deepest liquidity or the newest). No list, no table. If it is empty, ' +
+          'say no token launched with liquidity recently. Do not recommend buying.',
       });
     }
 
