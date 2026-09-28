@@ -48,6 +48,7 @@ export function StepCard({
   onPickToken,
   onAsk,
   onBuy,
+  onSell,
   onAddFunds,
   live,
   note,
@@ -70,6 +71,8 @@ export function StepCard({
   onAsk: (text: string) => void;
   /** Starts a buy for this token through the usual trade flow. */
   onBuy: (address: string, symbol: string) => void;
+  /** Starts a sell for an open portfolio position through the usual trade flow. */
+  onSell: (address: string, symbol: string) => void;
   /** Opens the add-funds dialog, from an empty paper portfolio. */
   onAddFunds?: () => void;
   /** The agent's comment, drawn inside cards that carry one (see CARD_OWNS_NOTE). */
@@ -127,9 +130,10 @@ export function StepCard({
           {step.kind === 'portfolio' && <PortfolioCard
               portfolio={step}
               live={live}
-              onAddFunds={onAddFunds}
-              onPickToken={onPickToken}
-              disabled={busy}
+               onAddFunds={onAddFunds}
+               onPickToken={onPickToken}
+               onSell={onSell}
+               disabled={busy}
             />}
 
           {step.kind === 'token_report' && (

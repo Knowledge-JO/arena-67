@@ -79,6 +79,7 @@ export function PortfolioCard({
   live = false,
   onAddFunds,
   onPickToken,
+  onSell,
   disabled,
 }: {
   portfolio: Portfolio;
@@ -87,6 +88,8 @@ export function PortfolioCard({
   onAddFunds?: () => void;
   /** Opens a token's report. */
   onPickToken?: (address: string, symbol: string) => void;
+  /** Starts a sell for an open token position. */
+  onSell?: (address: string, symbol: string) => void;
   disabled?: boolean;
 }) {
   const portfolio = useLivePortfolio(initial, live);
@@ -122,6 +125,7 @@ export function PortfolioCard({
           paper={paper}
           onAddFunds={onAddFunds}
           onPickToken={onPickToken}
+          onSell={onSell}
           disabled={disabled}
         />
       )}
@@ -244,12 +248,14 @@ function Holdings({
   paper,
   onAddFunds,
   onPickToken,
+  onSell,
   disabled,
 }: {
   holdings: Holding[];
   paper: boolean;
   onAddFunds?: () => void;
   onPickToken?: (address: string, symbol: string) => void;
+  onSell?: (address: string, symbol: string) => void;
   disabled?: boolean;
 }) {
   const [all, setAll] = useState(false);
@@ -282,13 +288,13 @@ function Holdings({
           const pnl = paper && !cash ? (h.pnlUsd ?? null) : null;
           const canOpen = !cash && !!onPickToken;
           return (
-            <li key={h.address}>
+            <li key={h.address} className="flex items-center gap-2 px-4 py-2.5">
               <button
                 type="button"
                 disabled={disabled || !canOpen}
                 onClick={() => onPickToken?.(h.address, h.symbol)}
                 title={canOpen ? `Open ${h.symbol}` : undefined}
-                className="flex w-full items-center gap-3 px-4 py-2.5 text-left enabled:hover:bg-surface disabled:cursor-default"
+                className="flex min-w-0 flex-1 items-center gap-3 text-left enabled:hover:text-fg-muted disabled:cursor-default"
               >
                 <TokenAvatar symbol={h.symbol} imageUrl={h.imageUrl} size="sm" />
                 <div className="min-w-0 flex-1">
@@ -312,6 +318,16 @@ function Holdings({
                   )}
                 </div>
               </button>
+              {!cash && onSell && (
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => onSell(h.address, h.symbol)}
+                  className="shrink-0 rounded-md border border-negative/40 px-2.5 py-1.5 text-[11px] font-semibold text-negative transition-colors hover:border-negative hover:bg-negative/10 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Sell
+                </button>
+              )}
             </li>
           );
         })}

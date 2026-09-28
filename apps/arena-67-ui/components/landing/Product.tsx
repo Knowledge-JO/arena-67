@@ -111,6 +111,7 @@ export function Product() {
                 onPickToken={() => router.push('/dashboard')}
                 onAsk={() => router.push('/dashboard')}
                 onBuy={() => router.push('/dashboard')}
+                onSell={() => router.push('/dashboard')}
               />
 
               <Composer

@@ -388,6 +388,10 @@ function Arena({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
       if (busy) return;
       void ask(`Buy ${symbol} (${address})`);
     },
+    onSell: (address: string, symbol: string) => {
+      if (busy) return;
+      void ask(`Sell ${symbol} (${address})`);
+    },
     onSelectToken: (intentId: string, candidateId: string) =>
       act(`${entryId}:${intentId}`, () => api.selectToken(intentId, candidateId)),
     onConfirm: (intentId: string, quoteId: string) =>

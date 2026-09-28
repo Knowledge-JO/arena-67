@@ -6,6 +6,7 @@ import { ArrowRight, Loader2, Mail } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import type { Me } from '@/lib/types';
+import { Logo } from '@/components/brand/Logo';
 
 /**
  * Email, then a code. The same two steps for a new account and a returning one.
@@ -75,10 +76,8 @@ export function SignIn({ onSignedIn }: { onSignedIn: (me: Me, isNewUser: boolean
         className="w-full max-w-sm"
       >
         <div className="mb-8">
-          <div className="mb-3 inline-grid h-9 w-9 place-items-center rounded-lg bg-accent/15 text-xs font-semibold text-accent">
-            67
-          </div>
-          <h1 className="text-xl font-semibold tracking-tight">Arena 67</h1>
+          <Logo className="text-fg" />
+          <h1 className="sr-only">Arena 67</h1>
           <p className="mt-1 text-sm text-fg-muted">
             Research and trade memecoins on Robinhood Chain.
           </p>
@@ -120,6 +119,9 @@ export function SignIn({ onSignedIn }: { onSignedIn: (me: Me, isNewUser: boolean
                 New here or returning — same step. We&apos;ll email you a code, and
                 create your wallet the first time you sign in.
               </p>
+              <p className="mt-2 text-xs text-fg-subtle">
+                If you don&apos;t see it, check your spam or promotions folder.
+              </p>
             </motion.form>
           ) : (
             <motion.div
@@ -135,6 +137,9 @@ export function SignIn({ onSignedIn }: { onSignedIn: (me: Me, isNewUser: boolean
                   expires in 10 minutes.
                 </span>
               </div>
+              <p className="mb-4 text-xs text-fg-subtle">
+                Check your spam or promotions folder if the code isn&apos;t in your inbox.
+              </p>
               <label className="mb-1.5 block text-xs text-fg-muted">6-digit code</label>
               <input
                 ref={codeRef}
