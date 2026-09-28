@@ -72,7 +72,11 @@ export interface TokenChoice {
 /** What kind of address a holder is. Mirrors the backend's HolderLabel. */
 export type HolderKind = 'wallet' | 'pool' | 'burn' | 'token' | 'contract';
 
-export type HoldersStatus = 'queued' | 'indexing' | 'ready' | 'failed' | 'not_indexed' | 'unavailable';
+/** `too_large`: too many holders to keep, so deliberately not counted. */
+export type HoldersStatus = 'queued' | 'indexing' | 'ready' | 'failed' | 'not_indexed' | 'unavailable' | 'too_large';
+
+/** States that will not change by waiting — no point polling for them. */
+export const SETTLED_HOLDERS: ReadonlySet<HoldersStatus> = new Set(['ready', 'failed', 'unavailable', 'too_large']);
 
 export interface HolderRow {
   rank: number;

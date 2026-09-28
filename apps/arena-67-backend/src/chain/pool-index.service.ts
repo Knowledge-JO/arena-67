@@ -5,6 +5,7 @@ import { parseAbiItem, type Address } from 'viem';
 import { ChainService } from './chain.service';
 import { NATIVE_TOKEN } from './networks';
 import { ERC20_ABI } from '../trading/uniswap-v4.abi';
+import { MAX_SPAN } from '../holders/transfer-fold';
 
 export const INITIALIZE_EVENT = parseAbiItem(
   'event Initialize(bytes32 indexed id, address indexed currency0, address indexed currency1, uint24 fee, int24 tickSpacing, address hooks, uint160 sqrtPriceX96, int24 tick)',
@@ -195,8 +196,10 @@ export class PoolIndexService implements OnModuleInit {
    * happily reports pools years older — microduck's deepest venue was created
    * at block 47.4M against a hook, which no amount of tier-guessing would
    * reconstruct. A poolId is keccak(PoolKey) and cannot be reversed, but
-   * `Initialize` declares `id` as an indexed topic, so one filtered getLogs
-   * over the full range recovers the key in around two seconds.
+   * `Initialize` declares `id` as an indexed topic, so a filtered getLogs
+   * recovers the key. The RPC allows at most ten million blocks per query, so
+   * the search walks back from the head in windows of that size — eight or so
+   * cheap calls at worst, and the answer is cached for good.
    *
    * Throws on RPC failure rather than returning null: "the chain says no such
    * pool" and "we could not ask" must not collapse into the same answer, or a
@@ -210,15 +213,13 @@ export class PoolIndexService implements OnModuleInit {
 
     if (this.resolved.has(key)) return this.resolved.get(key) ?? null;
 
-    const logs = await this.chain.client.getLogs({
-      address: this.chain.network.uniswapV4.POOL_MANAGER,
-      event: INITIALIZE_EVENT,
-      args: { id: key as `0x${string}` },
-      fromBlock: 0n,
-      toBlock: 'latest',
-    });
+    const head = await this.chain.latestBlock();
+    let found: Awaited<ReturnType<typeof this.initializeLogs>>[number] | undefined;
+    for (let to = head; to >= 0n && !found; to -= MAX_SPAN) {
+      const from = to - MAX_SPAN + 1n > 0n ? to - MAX_SPAN + 1n : 0n;
+      found = (await this.initializeLogs(key as `0x${string}`, from, to))[0];
+    }
 
-    const found = logs[0];
     if (!found) {
       this.resolved.set(key, null);
       return null;
@@ -244,6 +245,16 @@ export class PoolIndexService implements OnModuleInit {
     this.resolved.set(key, record);
     this.log.debug(`resolved pool ${key.slice(0, 12)}… from block ${record.block}`);
     return record;
+  }
+
+  private initializeLogs(id: `0x${string}`, fromBlock: bigint, toBlock: bigint) {
+    return this.chain.client.getLogs({
+      address: this.chain.network.uniswapV4.POOL_MANAGER,
+      event: INITIALIZE_EVENT,
+      args: { id },
+      fromBlock,
+      toBlock,
+    });
   }
 
   /**

@@ -21,7 +21,8 @@ import {
   type TransferLog,
 } from './transfer-fold';
 
-export type IndexStatus = 'queued' | 'indexing' | 'ready' | 'failed';
+/** `too_large`: more holders than the budget allows, so deliberately not indexed. */
+export type IndexStatus = 'queued' | 'indexing' | 'ready' | 'failed' | 'too_large';
 
 /** Why a token is being indexed. Higher runs first. */
 export const PRIORITY = { heldByUser: 1, topVolume: 2, userRequest: 3 } as const;
@@ -89,6 +90,7 @@ export class HolderIndexService implements OnModuleInit, OnModuleDestroy {
   private pumping = false;
   private head: { block: bigint; at: number } | null = null;
   private stopping = false;
+  private pruneTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     @Inject(DRIZZLE) handle: unknown,
@@ -105,6 +107,9 @@ export class HolderIndexService implements OnModuleInit, OnModuleDestroy {
       .update(tokenIndexState)
       .set({ status: 'queued' })
       .where(eq(tokenIndexState.status, 'indexing'));
+    // Soon after start rather than on the hour: a database at its size cap
+    // refuses every write until this runs.
+    this.pruneTimer = setTimeout(() => void this.prune(), 30_000);
   }
 
   /**
@@ -114,10 +119,19 @@ export class HolderIndexService implements OnModuleInit, OnModuleDestroy {
    */
   onModuleDestroy(): void {
     this.stopping = true;
+    clearTimeout(this.pruneTimer);
   }
 
   private get concurrency(): number {
     return this.config.get<number>('HOLDER_INDEX_CONCURRENCY') ?? 2;
+  }
+
+  private get maxHolders(): number {
+    return this.config.get<number>('HOLDER_INDEX_MAX_HOLDERS') ?? 50_000;
+  }
+
+  private get retainMs(): number {
+    return (this.config.get<number>('HOLDER_INDEX_RETAIN_DAYS') ?? 7) * 86_400_000;
   }
 
   /**
@@ -236,7 +250,7 @@ export class HolderIndexService implements OnModuleInit, OnModuleDestroy {
     r: { status: string; fromBlock: bigint | null; cursorBlock: bigint | null },
     head: bigint | null,
   ): number {
-    if (r.status === 'ready') return 100;
+    if (r.status === 'ready' || r.status === 'too_large') return 100;
     if (head == null || r.cursorBlock == null) return 0;
     // Until the first transfer is found the start is unknown; measuring from
     // genesis would claim most of the work is done when none of it is.
@@ -356,11 +370,14 @@ export class HolderIndexService implements OnModuleInit, OnModuleDestroy {
       // launch period needs.
       const span = state.cursorBlock == null ? target - from + 1n : 2_000_000n;
 
+      // Checked as the holders come in, so a token past the budget stops
+      // costing space and RPC time the moment it crosses it.
+      let tooLarge = false;
       await walkLogs<TransferLog>({
         from,
         to: target,
         span,
-        shouldStop: () => this.stopping,
+        shouldStop: () => this.stopping || tooLarge,
         fetch: (a, b) =>
           this.chain.backgroundClient.getLogs({
             address: getAddress(token) as Address,
@@ -368,9 +385,16 @@ export class HolderIndexService implements OnModuleInit, OnModuleDestroy {
             fromBlock: a,
             toBlock: b,
           }) as Promise<TransferLog[]>,
-        onChunk: (logs, _a, b) => this.commit(token, logs, b),
+        onChunk: async (logs, _a, b) => {
+          await this.commit(token, logs, b);
+          if (logs.length > 0 && (await this.holderCount(token)) > this.maxHolders) tooLarge = true;
+        },
       });
 
+      if (tooLarge) {
+        await this.markTooLarge(token);
+        return;
+      }
       if (this.stopping) return;
       await this.markReady(token);
       const s = await this.db.query.tokenIndexState.findFirst({
@@ -406,6 +430,78 @@ export class HolderIndexService implements OnModuleInit, OnModuleDestroy {
         this.log.warn(`could not record failure for ${token}: ${(recordErr as Error).message.split('\n')[0]}`);
       }
       this.log.warn(`holder backfill failed for ${token}: ${message}`);
+    }
+  }
+
+  private async holderCount(token: string): Promise<number> {
+    const [{ n }] = await this.db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(tokenHolders)
+      .where(eq(tokenHolders.token, token));
+    return n;
+  }
+
+  /**
+   * Gives up on a token with more holders than the budget: its rows go, and
+   * it is never queued again. Reports say it is too widely held to count.
+   */
+  private async markTooLarge(token: string): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      await tx.delete(tokenHolders).where(eq(tokenHolders.token, token));
+      await tx
+        .update(tokenIndexState)
+        .set({ status: 'too_large', cursorBlock: null, lastError: null, updatedAt: new Date() })
+        .where(eq(tokenIndexState.token, token));
+    });
+    this.log.log(`holders not kept for ${token.slice(0, 10)}…: over ${this.maxHolders} holders`);
+  }
+
+  /**
+   * Keeps the holder table inside its budget. Runs hourly and shortly after
+   * start: the database has a hard size cap, and the table used to fill it —
+   * 480 MB of 512, two-thirds of it five widely held tokens.
+   *
+   *   - A ready token that has grown past the holder budget is dropped.
+   *   - A token nobody has asked about for the retention period is forgotten
+   *     entirely; asking again rebuilds it from the chain. Tokens users hold
+   *     are re-requested every few minutes, so they are never forgotten.
+   */
+  @Cron(CronExpression.EVERY_HOUR)
+  async prune(): Promise<void> {
+    try {
+      const oversized = await this.db
+        .select({ token: tokenHolders.token })
+        .from(tokenHolders)
+        .groupBy(tokenHolders.token)
+        .having(sql`count(*) > ${this.maxHolders}`);
+      for (const { token } of oversized) {
+        if (!this.active.has(token)) await this.markTooLarge(token);
+      }
+
+      const cutoff = new Date(Date.now() - this.retainMs);
+      const stale = await this.db
+        .select({ token: tokenIndexState.token })
+        .from(tokenIndexState)
+        .where(
+          and(
+            lte(tokenIndexState.requestedAt, cutoff),
+            or(isNull(tokenIndexState.trackedUntil), lte(tokenIndexState.trackedUntil, new Date())),
+          ),
+        );
+      let forgotten = 0;
+      for (const { token } of stale) {
+        if (this.active.has(token) || this.quick.has(token)) continue;
+        await this.db.transaction(async (tx) => {
+          await tx.delete(tokenHolders).where(eq(tokenHolders.token, token));
+          await tx.delete(tokenIndexState).where(eq(tokenIndexState.token, token));
+        });
+        forgotten += 1;
+      }
+      if (oversized.length || forgotten) {
+        this.log.log(`holder index pruned: ${oversized.length} over budget, ${forgotten} unused for ${this.retainMs / 86_400_000}d`);
+      }
+    } catch (err) {
+      this.log.warn(`holder index prune failed: ${(err as Error).message.split('\n')[0]}`);
     }
   }
 

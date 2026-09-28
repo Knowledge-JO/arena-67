@@ -6,6 +6,7 @@ import { Check, Loader2, RefreshCw, Wallet } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import type { HolderOverlap } from '@/lib/types';
+import { SETTLED_HOLDERS } from '@/lib/types';
 import { AddressChip, asOf, pctOfSupply, useHolderProgress } from './shared';
 import { CardNote } from '../chat/CardNote';
 
@@ -36,7 +37,7 @@ export function HolderOverlapCard({
   const [error, setError] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
 
-  const pending = data.tokens.filter((t) => t.status !== 'ready' && t.status !== 'unavailable');
+  const pending = data.tokens.filter((t) => !SETTLED_HOLDERS.has(t.status));
   const compared = data.tokens.filter((t) => t.status === 'ready');
   const live = useHolderProgress(
     pending.map((t) => t.address),
@@ -107,11 +108,11 @@ export function HolderOverlapCard({
               >
                 {ready || nowReady ? (
                   <Check size={10} className={nowReady ? 'text-positive' : 'text-fg-subtle'} />
-                ) : t.status === 'unavailable' ? null : (
+                ) : t.status === 'unavailable' || t.status === 'too_large' ? null : (
                   <Loader2 size={10} className="animate-spin" />
                 )}
                 {tag(t.symbol, t.address)}
-                {!ready && !nowReady && t.status !== 'unavailable' && (
+                {!ready && !nowReady && t.status !== 'unavailable' && t.status !== 'too_large' && (
                   // Queued is "not started", which 0% would misread as "no holders".
                   <span className="tabular-nums">
                     {(p?.status ?? t.status) === 'indexing'
@@ -120,6 +121,7 @@ export function HolderOverlapCard({
                   </span>
                 )}
                 {t.status === 'unavailable' && <span>· unreadable</span>}
+                {t.status === 'too_large' && <span>· too widely held</span>}
               </li>
             );
           })}

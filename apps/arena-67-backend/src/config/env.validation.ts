@@ -87,6 +87,13 @@ export const envSchema = z.object({
    */
   /** Tokens whose holder history is rebuilt at once. Each is a stream of getLogs calls. */
   HOLDER_INDEX_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(2),
+  /**
+   * Tokens with more holders than this are not indexed. Tokenised stocks run
+   * to 100k+ holders each and filled a 512 MB database on their own.
+   */
+  HOLDER_INDEX_MAX_HOLDERS: z.coerce.number().int().min(1_000).default(50_000),
+  /** Holder data for tokens nobody has asked about in this many days is deleted. */
+  HOLDER_INDEX_RETAIN_DAYS: z.coerce.number().int().min(1).default(7),
   AGENT_MAX_TURNS: z.coerce.number().int().min(1).max(10).default(5),
 
   /** How far back the pool index backfills on boot. */

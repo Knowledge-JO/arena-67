@@ -1,4 +1,4 @@
-import { foldTransfers, isOverflow, nextSpan, walkLogs, ZERO_ADDRESS, type TransferLog } from './transfer-fold';
+import { foldTransfers, isOverflow, MAX_SPAN, nextSpan, walkLogs, ZERO_ADDRESS, type TransferLog } from './transfer-fold';
 
 const A = '0x000000000000000000000000000000000000000a';
 const B = '0x000000000000000000000000000000000000000B';
@@ -48,6 +48,37 @@ describe('isOverflow', () => {
   });
   it('does not mistake a timeout for the cap', () => {
     expect(isOverflow(new Error('request timed out'))).toBe(false);
+  });
+});
+
+describe('the RPC block-range cap', () => {
+  // Verbatim from the public RPC, 2026-09-28.
+  const refused = Object.assign(new Error('Invalid parameters were provided to the RPC method.'), {
+    details:
+      'query spans 75022064 blocks (0 to 75022063), but only 10000000 are allowed for this request; narrow the block range',
+  });
+
+  it('counts as overflow, so the window shrinks at once instead of retrying', () => {
+    expect(isOverflow(refused)).toBe(true);
+    expect(isOverflow({ cause: refused })).toBe(true);
+  });
+
+  it('never asks for more than the cap, even from block 0', async () => {
+    const widths: bigint[] = [];
+    await walkLogs<number>({
+      from: 0n,
+      to: 25_000_000n,
+      span: 75_000_000n,
+      sleep: async () => undefined,
+      fetch: async (a, b) => {
+        widths.push(b - a + 1n);
+        if (b - a + 1n > MAX_SPAN) throw refused;
+        return [];
+      },
+      onChunk: async () => undefined,
+    });
+    expect(widths.every((w) => w <= MAX_SPAN)).toBe(true);
+    expect(nextSpan(MAX_SPAN, 0)).toBe(MAX_SPAN);
   });
 });
 

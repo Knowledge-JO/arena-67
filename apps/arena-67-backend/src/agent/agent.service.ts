@@ -4,7 +4,8 @@ import { McpClientService, type McpSession } from './mcp-client.service';
 import { ConversationService } from '../memory/conversation.service';
 import { AuthService } from '../auth/auth.service';
 import { SandboxService, type TradingMode } from '../sandbox/sandbox.service';
-import { historyForModel, type StoredTurn } from './history';
+import { cardsShownNote, historyForModel, stripCardNotes, type StoredTurn } from './history';
+import { asksForPortfolio, needsTool } from './intent';
 import {
   ReasoningService,
   type ChatMessage,
@@ -87,6 +88,9 @@ Rules:
 - Several tokens routinely share a ticker. When a search returns more than one,
   show the candidates with their addresses and pool counts and ask which they
   mean. Never pick for them.
+- A sell is always of a token the user holds. For "sell X" without an
+  address, call get_portfolio first and use the address of the X they hold;
+  only if they hold none, or more than one called X, ask which.
 - When a tool reports a token has no market data, say exactly that. Do not
   describe it as worth zero.
 - Quote the guaranteed minimum from a quote, not the expected fill: that is the
@@ -130,6 +134,8 @@ Research:
 - When holder data is still being counted, say so plainly and that the card
   will fill the holders in by itself when counting finishes — nobody needs to
   ask again. Never fill the gap yourself.
+- Holder status too_large means the token has too many holders to be listed
+  here (usually a tokenised stock). Say that; it is not being counted.
 - Signals are facts, not advice. Do not tell anyone to buy or sell.
 
 The user is signed in and has their own wallet. Tools that read their account
@@ -276,9 +282,16 @@ export class AgentService {
         // The conversation id lets recall_memory exclude the current thread.
         // Passing a different one leaks nothing: recall is filtered by the
         // token's user in the query itself, so the id only ever narrows.
-        content: `${SYSTEM_PROMPT}\n\n${modeNote(mode)}\n\nCurrent conversation id: ${conversationId}`,
+        content: [
+          SYSTEM_PROMPT,
+          modeNote(mode),
+          cardsShownNote(history),
+          `Current conversation id: ${conversationId}`,
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
       },
-      // Cleaned: no tables to copy or reuse, and card turns marked stale.
+      // Cleaned: no tables or card notes to copy or reuse.
       ...historyForModel(history).map((m) => ({ role: m.role, content: m.content }) as ChatMessage),
       { role: 'user', content: userMessage },
     ];
@@ -286,6 +299,7 @@ export class AgentService {
     const toolsUsed: string[] = [];
     let rounds = 0;
     let step: Record<string, unknown> | null = null;
+    let nudged = false;
 
     for (let turn = 0; turn < maxTurns; turn++) {
       rounds = turn + 1;
@@ -294,8 +308,27 @@ export class AgentService {
 
       const calls = completion.message.tool_calls ?? [];
       if (calls.length === 0) {
+        // Answered from earlier messages when the request needs live data or
+        // a trade: no card, and figures that may be stale. Seen live with
+        // "sell NVDA" and "show my portfolio". One nudge, then accept.
+        if (!nudged && toolsUsed.length === 0 && needsTool(userMessage) && turn + 1 < maxTurns) {
+          nudged = true;
+          this.log.warn(`model answered "${userMessage.slice(0, 60)}" without a tool; nudging once`);
+          messages.push({
+            role: 'user',
+            content:
+              'You answered without calling a tool. This request needs live data or a trade, ' +
+              'so call the right tool now (for example get_portfolio, prepare_trade or ' +
+              'get_token_report) — the tool is what shows the user their card. Do not reuse ' +
+              'anything from earlier messages. If it truly needs no tool, give the same answer again.',
+          });
+          continue;
+        }
+        if (asksForPortfolio(userMessage) && step?.kind !== 'portfolio') {
+          step = (await this.portfolioFallback(session, toolsUsed, onToolCall)) ?? step;
+        }
         return {
-          reply: completion.message.content ?? '',
+          reply: stripCardNotes(completion.message.content ?? ''),
           toolsUsed,
           truncated: false,
           rounds,
@@ -349,7 +382,7 @@ export class AgentService {
     );
 
     return {
-      reply: last.message.content ?? '',
+      reply: stripCardNotes(last.message.content ?? ''),
       toolsUsed,
       truncated: true,
       rounds,
@@ -406,7 +439,8 @@ export class AgentService {
         instruction:
           `${shown} In two to four sentences, say what stands out and which ` +
           'signals matter most. If holders are not ready, say they are still ' +
-          'being counted.',
+          'being counted — unless their status is too_large: then say the token ' +
+          'is too widely held for its holders to be listed here.',
       });
     }
 
@@ -466,8 +500,10 @@ export class AgentService {
       return JSON.stringify({
         compared: compared.map((t) => t.symbol),
         stillCounting: o.tokens
-          .filter((t) => t.status !== 'ready')
+          .filter((t) => t.status !== 'ready' && t.status !== 'too_large')
           .map((t) => `${t.symbol} (${t.status}${t.progress ? `, ${t.progress}%` : ''})`),
+        // Deliberately not indexed: say so, never "still counting".
+        tooWidelyHeld: o.tokens.filter((t) => t.status === 'too_large').map((t) => t.symbol),
         topHoldersComparedPerToken: o.topN,
         holderKinds: o.include,
         overlapCount: o.overlaps.length,
@@ -536,6 +572,18 @@ export class AgentService {
       });
     }
 
+    if (step.kind === 'token_detail') {
+      // Pool ids stay in, so "use the USDG pool" typed back can be acted on;
+      // the rows themselves are on the card and must not be listed again.
+      return JSON.stringify({
+        ...JSON.parse(original),
+        instruction:
+          `${shown} The card lists the pools and takes the amount. In one short ` +
+          'sentence, tell the user what to do next on it (pick a pool, or enter ' +
+          'an amount). Do not list the pools, prices or liquidity.',
+      });
+    }
+
     if (step.kind !== 'token_choices') return original;
 
     const candidates = (step.candidates ?? []) as Array<{
@@ -596,6 +644,25 @@ export class AgentService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * "Show my portfolio" must end in the portfolio card. If the model still
+   * answered without it, fetch it directly — the card carries the answer, and
+   * its text is hidden for portfolio cards anyway.
+   */
+  private async portfolioFallback(
+    session: McpSession,
+    toolsUsed: string[],
+    onToolCall?: ToolCallListener,
+  ): Promise<Record<string, unknown> | null> {
+    if (!session.tools.some((t) => t.function.name === 'get_portfolio')) return null;
+    const call: ToolCall = { id: 'portfolio-fallback', type: 'function', function: { name: 'get_portfolio', arguments: '{}' } };
+    toolsUsed.push('get_portfolio');
+    const found = this.asStep(await this.runTool(session, call, onToolCall));
+    if (found?.kind !== 'portfolio') return null;
+    this.log.warn('portfolio card fetched directly: the model did not call get_portfolio');
+    return this.forStorage(found);
   }
 
   private async runTool(
