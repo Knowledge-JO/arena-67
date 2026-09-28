@@ -48,12 +48,39 @@ function toEntries(rows: StoredMessage[]): Entry[] {
  */
 export default function Dashboard() {
   const [me, setMe] = useState<Me | null | undefined>(undefined);
+  const [loadError, setLoadError] = useState(false);
 
-  useEffect(() => {
-    void api.me().then(setMe);
+  const loadMe = useCallback(() => {
+    void api.me().then(setMe).catch(() => setLoadError(true));
   }, []);
 
+  useEffect(() => {
+    loadMe();
+  }, [loadMe]);
+
   if (me === undefined) {
+    if (loadError) {
+      return (
+        <div className="grid h-dvh place-items-center bg-bg px-6 text-center text-fg">
+          <div>
+            <p className="font-ticker text-xs uppercase tracking-[0.18em] text-fg-subtle">
+              Desk unavailable
+            </p>
+            <p className="mt-3 text-sm text-fg-muted">The dashboard could not reach the trading desk.</p>
+            <button
+              type="button"
+              onClick={() => {
+                setLoadError(false);
+                loadMe();
+              }}
+              className="mt-5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-accent-fg transition-opacity hover:opacity-90"
+            >
+              Try again
+            </button>
+          </div>
+        </div>
+      );
+    }
     return <div className="grid h-dvh place-items-center bg-bg text-xs text-fg-subtle">Loading…</div>;
   }
   if (me === null) {
