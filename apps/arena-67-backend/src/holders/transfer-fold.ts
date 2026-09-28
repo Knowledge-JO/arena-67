@@ -55,9 +55,11 @@ export function byToken<T extends { address: string }>(logs: T[]): Map<string, T
 }
 
 /**
- * The RPC's one hard limit, measured: "logs matched by query exceeds limit of
- * 10000". It is a cap on results, not on block range — which is what makes
- * an adaptive window work at all.
+ * The RPC's two limits, both measured. "logs matched by query exceeds limit
+ * of 10000" caps results; "query spans N blocks … only 10000000 are allowed;
+ * narrow the block range" caps the range (added later — the chain is past
+ * 75M blocks, so a query from block 0 is always refused now). Either way the
+ * answer is a smaller window, straight away rather than after retries.
  */
 export function isOverflow(err: unknown): boolean {
   let e: unknown = err;
@@ -68,14 +70,17 @@ export function isOverflow(err: unknown): boolean {
     ]
       .filter(Boolean)
       .join(' ');
-    if (/exceeds limit|too many|query returned more than/i.test(text)) return true;
+    if (/exceeds limit|too many|query returned more than|narrow the block range|are allowed for this request/i.test(text)) {
+      return true;
+    }
     e = (e as { cause?: unknown }).cause;
   }
   return false;
 }
 
 export const MIN_SPAN = 1n;
-export const MAX_SPAN = 50_000_000n;
+/** The RPC refuses a getLogs spanning more than ten million blocks. */
+export const MAX_SPAN = 10_000_000n;
 /** Under this many logs a chunk is sparse and the window can grow. */
 const GROW_BELOW = 2_500;
 
@@ -116,7 +121,7 @@ export interface WalkOptions<L> {
 export async function walkLogs<L>(opts: WalkOptions<L>): Promise<bigint> {
   const sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const retries = opts.retries ?? 3;
-  let span = opts.span < MIN_SPAN ? MIN_SPAN : opts.span;
+  let span = opts.span < MIN_SPAN ? MIN_SPAN : opts.span > MAX_SPAN ? MAX_SPAN : opts.span;
   let start = opts.from;
   let failures = 0;
 

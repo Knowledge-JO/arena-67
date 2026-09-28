@@ -6,6 +6,7 @@ import { ArrowUpRight, Check, Copy } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn, shortAddress } from '@/lib/utils';
 import type { HolderKind, HoldersStatus, LiveMarket } from '@/lib/types';
+import { SETTLED_HOLDERS } from '@/lib/types';
 
 /**
  * Plain words for each kind of holder. The people using this are not reading
@@ -224,7 +225,7 @@ export function useHolderProgress(tokens: string[], enabled: boolean) {
         if (cancelled) return;
         const next = Object.fromEntries(rows.map((r) => [r.address.toLowerCase(), r]));
         setProgress(next);
-        if (rows.every((r) => r.status === 'ready')) return;
+        if (rows.every((r) => SETTLED_HOLDERS.has(r.status))) return;
       } catch {
         /* a failed poll just waits for the next one */
       }

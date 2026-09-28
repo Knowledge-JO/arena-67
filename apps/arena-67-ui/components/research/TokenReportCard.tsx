@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { usd, usdCompact, percent, changeTone, count } from '@/lib/format';
 import type { HoldersBlock, Signal, TokenReport } from '@/lib/types';
+import { SETTLED_HOLDERS } from '@/lib/types';
 import {
   AddressChip,
   CountingBar,
@@ -72,7 +73,7 @@ export function TokenReportCard({
   const marketCap = liveData ? liveData.marketCap : market?.marketCap;
   const flash = usePriceFlash(priceUsd);
   const [holders, setHolders] = useState<HoldersBlock>(report.holders);
-  const counting = holders.status !== 'ready' && holders.status !== 'unavailable' && holders.status !== 'failed';
+  const counting = !SETTLED_HOLDERS.has(holders.status);
   const progress = useHolderProgress([token.address], counting);
   const holderLive = progress[token.address.toLowerCase()];
 
@@ -326,6 +327,13 @@ function HoldersSection({
   const [expanded, setExpanded] = useState(false);
   const [legend, setLegend] = useState(false);
 
+  if (holders.status === 'too_large') {
+    return (
+      <p className="rounded-lg bg-surface px-3 py-2.5 text-xs text-fg-muted">
+        This token is held by too many wallets to list its holders here — usually the case for tokenised stocks.
+      </p>
+    );
+  }
   if (holders.status === 'unavailable' || holders.status === 'failed') {
     return (
       <p className="rounded-lg bg-surface px-3 py-2.5 text-xs text-fg-muted">

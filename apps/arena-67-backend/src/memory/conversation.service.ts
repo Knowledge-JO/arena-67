@@ -4,6 +4,7 @@ import { DRIZZLE } from '../database/database.constants';
 import { dbOf, type Database } from '../database/database.module';
 import { conversations, messages } from '../database/schema';
 import { EmbeddingService } from './embedding.service';
+import { stripCardNotes } from '../agent/history';
 
 export interface StoredTurn {
   role: 'user' | 'assistant';
@@ -77,7 +78,7 @@ export class ConversationService {
 
   async messagesOf(userId: string, conversationId: string) {
     await this.assertOwned(userId, conversationId);
-    return this.db
+    const rows = await this.db
       .select({
         id: messages.id,
         role: messages.role,
@@ -89,6 +90,8 @@ export class ConversationService {
       .from(messages)
       .where(eq(messages.conversationId, conversationId))
       .orderBy(asc(messages.createdAt));
+    // Older replies can carry the model-only card notes; people never see them.
+    return rows.map((r) => (r.role === 'assistant' ? { ...r, content: stripCardNotes(r.content) } : r));
   }
 
   /** The last few turns, oldest first, for the model's immediate context. */
@@ -176,7 +179,7 @@ export class ConversationService {
 
     return rows
       .map((r) => ({
-        content: r.content,
+        content: stripCardNotes(r.content),
         role: r.role,
         conversationId: r.conversationId,
         createdAt: r.createdAt,
