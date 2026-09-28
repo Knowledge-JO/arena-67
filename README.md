@@ -13,7 +13,7 @@ place a wallet can leak. Arena 67 takes the opposite premise: a language model
 reads your intent, the desk prices it, and execution happens only through one
 confirm gate that you approve in plain language.
 
-Live frontend: http://162.62.231.147:3000 · Live backend: http://162.62.231.147:9000 · Trades settle on ethereum mainnet via the CDP-held wallet.
+Live: https://agent67desk.work · API: https://api.agent67desk.work · Trades settle on ethereum mainnet via the CDP-held wallet.
 
 [See it in one command](#see-it-in-one-command) · [The one rule](#the-one-rule) · [What Arena 67 does](#what-arena-67-does) · [Architecture](#architecture) · [Safety, enforced in code](#safety-enforced-in-code) · [Tests](#tests)
 
@@ -70,7 +70,7 @@ whole trade flow is safe to click through before anything real is on the line.
 
 ## Screenshots
 
-Screenshot capture of the live app at http://162.62.231.147:3000 is still
+Screenshot capture of the live app at https://agent67desk.work is still
 pending. The captures below will cover the three surfaces that matter most:
 
 - Dashboard with the chat input and the account's mode and balance.
@@ -263,9 +263,9 @@ authorization.
 ## Engineering decisions and the hard problems
 
 - *Cookie sessions over bearer tokens.* OTP-verified sessions ride in HttpOnly
-  cookies, so the token never exists in JavaScript memory. The `Secure` flag is
-  deferred until the server is behind TLS (it is running plain HTTP on the VPS
-  today).
+  cookies, so the token never exists in JavaScript memory. The `Secure` flag
+  is only set in production, now that Caddy terminates TLS in front of the
+  backend.
 - *Opaque ids over card-carried addresses.* The biggest failure mode in agentic
   trading is a UI card that carries a pool address back into execution. The
   desk resolves everything server-side, so the UI is structurally unable to
@@ -302,7 +302,7 @@ authorization.
 | MCP gateway on :5100 | Real - token-gated, `inboundAuth: true` verified |
 | Postgres migrations on Neon | Real - applied at boot on the VPS |
 | Wallet export flow | Endpoints exist (`POST /wallet/export/code`, `POST /wallet/export`); not yet exercised E2E |
-| Domain with TLS | Not yet established - the app runs on a raw IP over plain HTTP |
+| Domain with TLS | Real - agent67desk.work behind Caddy with Let's Encrypt |
 | Screenshots | Not yet established - capture pending |
 | CI test runs | Not yet established - tests run from the CLI |
 
@@ -443,14 +443,15 @@ app directory.
 
 Reference values from the live deployment:
 
-- `NODE_ENV` is intentionally unset on the server while it serves plain HTTP,
-  because production Secure cookies are dropped by browsers without TLS.
+- `NODE_ENV=production` is set on the backend; Secure cookies are served
+  because Caddy terminates TLS on the `api` subdomain.
 - `MCP_TOKEN` and `WALLET_ENCRYPTION_KEY` are set; keep both out of version
   control and treat the wallet key like a credential.
-- The domain step is the open item: once a domain resolves to the server, the
-  next move is a TLS reverse proxy (Caddy) in front of :3000 and :9000, a
-  rebuilt UI pointing at the API subdomain, and `CORS_ORIGIN` updated
-  accordingly.
+- The domain is live: `agent67desk.work` and `app.agent67desk.work` proxy to
+  the UI on :3000, and `api.agent67desk.work` to the backend on :9000, all
+  behind Caddy with Let's Encrypt. The UI was rebuilt with
+  `NEXT_PUBLIC_API_URL=https://api.agent67desk.work`, and `CORS_ORIGIN`
+  reflects the HTTPS origins.
 
 ## Project layout
 
