@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 64" role="img" aria-labelledby="title desc">
+  <title id="title">Arena 67</title>
+  <desc id="desc">Arena 67 geometric hexagon mark and wordmark</desc>
+  <rect width="256" height="64" rx="12" fill="#101011"/>
+  <g fill="none" stroke="#f0f0ef" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M32 4.5 55.5 18v28L32 59.5 8.5 46V18L32 4.5Z" stroke-width="3.5"/>
+    <path d="M23.5 23.5c-5.2 0-8.5 4.3-8.5 10.5v2c0 6.4 3.8 10.5 9.5 10.5s9.5-3.6 9.5-9-3.4-8.4-8.4-8.4c-3.3 0-5.8 1.4-7.4 3.8" stroke-width="4.5"/>
+    <path d="M35 24h14l-13 22" stroke-width="4.5"/>
+  </g>
+  <text x="74" y="40" fill="#f0f0ef" font-family="Space Grotesk, sans-serif" font-size="22" font-weight="700" letter-spacing="3">ARENA</text>
+  <text x="190" y="40" fill="#f0f0ef" font-family="JetBrains Mono, monospace" font-size="22" font-weight="500">67</text>
+</svg>

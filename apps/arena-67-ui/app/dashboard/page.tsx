@@ -18,6 +18,7 @@ import { ConversationList } from '@/components/account/ConversationList';
 import { ModeSwitch } from '@/components/account/ModeSwitch';
 import { SandboxBar } from '@/components/account/SandboxBar';
 import { AddFundsDialog } from '@/components/account/AddFundsDialog';
+import { Logo } from '@/components/brand/Logo';
 
 /** How many of the latest report cards keep their prices live. */
 const LIVE_REPORTS = 2;
@@ -373,12 +374,9 @@ function Arena({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
         <Link
           href="/"
           aria-label="Arena 67 home"
-          className="flex items-center gap-2 text-xs font-bold tracking-[0.16em] text-fg transition-colors hover:text-fg-muted"
+          className="text-fg transition-colors hover:text-fg-muted"
         >
-          ARENA
-          <span className="grid h-5 w-7 place-items-center border border-border-strong font-ticker text-[10px] font-medium tracking-normal">
-            67
-          </span>
+          <Logo />
         </Link>
         <span className="hidden h-4 w-px bg-border-strong md:block" aria-hidden="true" />
         <span className="hidden font-ticker text-[10px] uppercase tracking-[0.12em] text-fg-subtle md:inline">

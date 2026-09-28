@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { Logo } from '../brand/Logo';
 
 export function Nav() {
   return (
@@ -6,12 +7,10 @@ export function Nav() {
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5 sm:px-8">
         <Link
           href="/"
-          className="flex items-center gap-2 font-display text-sm font-bold tracking-tight text-ink"
+          aria-label="Arena 67 home"
+          className="text-ink transition-colors hover:text-ink-muted"
         >
-          ARENA
-          <span className="grid h-5 w-8 place-items-center border border-ink font-ticker text-[10px] font-medium">
-            67
-          </span>
+          <Logo />
         </Link>
 
         <Link
