@@ -15,6 +15,10 @@ export const metadata: Metadata = {
   title: 'Arena 67',
   description:
     'Research and trade memecoins on Robinhood Chain through a single chat.',
+  icons: {
+    icon: '/icon.svg',
+    apple: '/apple-icon.png',
+  },
 };
 
 export default function RootLayout({
