@@ -16,6 +16,7 @@ import { SandboxService } from '../sandbox/sandbox.service';
 import { TransferTaxService, type TransferTax } from '../chain/transfer-tax.service';
 import { InsufficientPaperFunds, toFloat } from '../sandbox/paper-ledger';
 import type { TokenLink, TokenMarket, TokenPool, TokenStats } from '../market/market.types';
+import { PortfolioService } from '../accounts/portfolio.service';
 
 /** What the orchestrator hands back to the chat on every turn. */
 export type TradeStep =
@@ -178,6 +179,7 @@ export class TradingService {
     private readonly ledger: TradeLedgerService,
     private readonly sandbox: SandboxService,
     private readonly taxes: TransferTaxService,
+    private readonly portfolio: PortfolioService,
   ) {}
 
   /** Entry point for a fresh trade intent extracted by the OpenServ runtime. */
@@ -197,6 +199,25 @@ export class TradingService {
         return {
           kind: 'rejected',
           message: `${intent.contractAddress} does not look like a token on Robinhood Chain.`,
+        };
+      }
+      this.store.patch(pending.id, sessionId, { token });
+    } else if (intent.action === 'sell' && intent.ticker) {
+      const holding =
+        mode === 'sandbox'
+          ? await this.sandbox.findHeldToken(sessionId, intent.ticker)
+          : await this.portfolio.findHeldToken(sessionId, intent.ticker);
+      if (!holding) {
+        return {
+          kind: 'rejected',
+          message: `I could not find ${intent.ticker} in your portfolio. Tell me the exact token symbol or contract address you want to sell.`,
+        };
+      }
+      const token = await this.tokens.describe(holding.address);
+      if (!token) {
+        return {
+          kind: 'rejected',
+          message: `I found ${holding.symbol} in your portfolio, but I could not read its token details safely.`,
         };
       }
       this.store.patch(pending.id, sessionId, { token });

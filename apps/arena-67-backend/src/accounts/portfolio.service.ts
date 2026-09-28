@@ -9,6 +9,8 @@ import { UserWalletService } from './user-wallet.service';
 import { HoldingsScannerService } from './holdings-scanner.service';
 import { TradeLedgerService } from './trade-ledger.service';
 
+const CASH_SYMBOLS = new Set(['ETH', 'WETH', 'USDG', 'TUSDG']);
+
 export interface Holding {
   address: string;
   symbol: string;
@@ -52,6 +54,20 @@ export class PortfolioService {
     private readonly scanner: HoldingsScannerService,
     private readonly ledger: TradeLedgerService,
   ) {}
+
+  /** Finds a non-cash position by the symbol or name a user typed. */
+  async findHeldToken(userId: string, query: string): Promise<Holding | null> {
+    const needle = query.trim().replace(/^\$/, '').toLowerCase();
+    if (!needle) return null;
+    const portfolio = await this.forUser(userId);
+    return (
+      portfolio.holdings.find(
+        (h) =>
+          !CASH_SYMBOLS.has(h.symbol.toUpperCase()) &&
+          (h.symbol.toLowerCase() === needle || h.name.toLowerCase() === needle),
+      ) ?? null
+    );
+  }
 
   async forUser(userId: string): Promise<PortfolioStep> {
     const address = await this.wallets.addressOf(userId);

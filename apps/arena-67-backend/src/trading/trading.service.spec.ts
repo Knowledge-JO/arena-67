@@ -11,6 +11,7 @@ import type { PoolIndexService } from '../chain/pool-index.service';
 import type { BaseToken, NetworkConfig } from '../chain/networks';
 import type { TokenCandidate } from './pending-intent.store';
 import type { TradeIntent } from '../openserv/schemas';
+import type { PortfolioService } from '../accounts/portfolio.service';
 
 // @nestjs/config/@nestjs/schedule ship ESM-only dist that jest cannot
 // require() under CJS, and emitDecoratorMetadata forces the real DI graph to
@@ -175,10 +176,12 @@ function build() {
     resolveForToken: jest.fn().mockResolvedValue(POOL_RECORD),
   };
   const market = { forToken: jest.fn().mockResolvedValue(MARKET) };
+  const portfolio = { findHeldToken: jest.fn().mockResolvedValue(null) };
   // Live by default, so every test above the sandbox block exercises the
   // real-wallet path exactly as before.
   const sandbox = {
     mode: jest.fn().mockResolvedValue('live'),
+    findHeldToken: jest.fn().mockResolvedValue(null),
     balanceOf: jest.fn().mockResolvedValue(parseUnits('1000000', 6)),
     positions: jest.fn().mockResolvedValue(new Map([[NATIVE, { amount: parseUnits('1', 18) }]])),
     key: (a: string) => (a.toLowerCase() === BASE_WETH.address.toLowerCase() ? NATIVE : a.toLowerCase()),
@@ -201,9 +204,10 @@ function build() {
     ledger as unknown as TradeLedgerService,
     sandbox as unknown as import('../sandbox/sandbox.service').SandboxService,
     taxes as unknown as import('../chain/transfer-tax.service').TransferTaxService,
+    portfolio as unknown as PortfolioService,
   );
 
-  return { store, quotes, swaps, tokens, wallet, chain, index, market, ledger, sandbox, taxes, service };
+  return { store, quotes, swaps, tokens, wallet, chain, index, market, ledger, sandbox, taxes, portfolio, service };
 }
 
 /**
@@ -253,6 +257,38 @@ describe('TradingService', () => {
       intent({ amount: 10, currency: 'USDG' }),
     );
     expect(step.kind).toBe('choose_token');
+  });
+
+  it('resolves a ticker sell against the user portfolio before pricing it', async () => {
+    const { service, portfolio, tokens } = build();
+    portfolio.findHeldToken.mockResolvedValue({
+      address: TOKEN.address,
+      symbol: TOKEN.symbol,
+      name: TOKEN.name,
+      balance: '100',
+      priceUsd: 1,
+      valueUsd: 100,
+      imageUrl: null,
+    });
+    tokens.describe.mockResolvedValue(TOKEN);
+
+    const step = await service.begin('s1', intent({ action: 'sell', ticker: 'ANIME' }));
+
+    expect(portfolio.findHeldToken).toHaveBeenCalledWith('s1', 'ANIME');
+    expect(step.kind).toBe('token_detail');
+    if (step.kind !== 'token_detail') throw new Error('expected token_detail');
+    expect(step.action).toBe('sell');
+    expect(step.token.address).toBe(TOKEN.address);
+  });
+
+  it('rejects a ticker sell when the token is not in the user portfolio', async () => {
+    const { service, portfolio } = build();
+    portfolio.findHeldToken.mockResolvedValue(null);
+
+    const step = await service.begin('s1', intent({ action: 'sell', ticker: 'MISSING' }));
+
+    expect(step.kind).toBe('rejected');
+    expect(step.message).toMatch(/MISSING in your portfolio/);
   });
 
   it('pastes a picked candidate into the trade and proceeds to the amount', async () => {

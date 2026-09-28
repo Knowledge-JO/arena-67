@@ -462,6 +462,20 @@ export class SandboxService {
     };
   }
 
+  /** Finds a simulated open position by the symbol or name a user typed. */
+  async findHeldToken(userId: string, query: string): Promise<PaperHolding | null> {
+    const needle = query.trim().replace(/^\$/, '').toLowerCase();
+    if (!needle) return null;
+    const portfolio = await this.portfolio(userId);
+    return (
+      portfolio.holdings.find(
+        (h) =>
+          h.kind === 'position' &&
+          (h.symbol.toLowerCase() === needle || h.name.toLowerCase() === needle),
+      ) ?? null
+    );
+  }
+
   /** A token's on-chain price from its deepest pool, falling back to the market's. */
   private async positionPrice(asset: string): Promise<number | null> {
     const live = await this.livePrice.live(asset).catch(() => null);
