@@ -46,9 +46,12 @@ export class McpClientService {
     operation: (session: McpSession) => Promise<T>,
   ): Promise<T> {
     const client = new Client({ name: 'arena-67-backend', version: '1.0.0' });
+    const headers: Record<string, string> = { [USER_HEADER]: userToken };
+    const mcpToken = this.config.get<string>('MCP_TOKEN');
+    if (mcpToken) headers['authorization'] = `Bearer ${mcpToken}`;
     const transport = new StreamableHTTPClientTransport(
       new URL(this.config.getOrThrow<string>('MCP_URL')),
-      { requestInit: { headers: { [USER_HEADER]: userToken } } },
+      { requestInit: { headers } },
     );
 
     try {

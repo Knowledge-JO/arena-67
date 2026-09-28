@@ -78,6 +78,8 @@ export const envSchema = z.object({
 
   /** Where the desk finds its own tools. */
   MCP_URL: z.string().url().default('http://localhost:5100/mcp'),
+  /** Shared secret the MCP server requires on its inbound gate. */
+  MCP_TOKEN: z.string().optional(),
 
   /**
    * Tool-calling rounds per message. A model that misreads a result will call
