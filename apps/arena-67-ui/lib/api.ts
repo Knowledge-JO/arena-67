@@ -117,6 +117,7 @@ export const api = {
   // --- conversations
   conversations: () => request<ConversationSummary[]>('/conversations'),
   createConversation: () => post<{ id: string; title: string }>('/conversations'),
+  deleteConversation: (id: string) => request<void>(`/conversations/${id}`, { method: 'DELETE' }),
   messages: (id: string) => request<StoredMessage[]>(`/conversations/${id}/messages`),
 
   /** One agent turn. Omit conversationId to start a new conversation. */

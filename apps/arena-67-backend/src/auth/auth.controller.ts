@@ -55,10 +55,14 @@ export class AuthController {
 
   @Post('verify')
   @HttpCode(200)
-  async verify(@Body() body: unknown, @Res({ passthrough: true }) res: Response) {
+  async verify(
+    @Body() body: unknown,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const { email, code } = parse(VerifyBody, body);
     const { tokens, userId, isNewUser } = await this.auth.verifyCode(email, code);
-    this.setCookies(res, tokens);
+    this.setCookies(res, tokens, this.isSecureRequest(req));
     return {
       isNewUser,
       user: { id: userId, email: email.trim().toLowerCase() },
@@ -76,7 +80,7 @@ export class AuthController {
       return { ok: false };
     }
     try {
-      this.setCookies(res, await this.auth.refresh(token));
+      this.setCookies(res, await this.auth.refresh(token), this.isSecureRequest(req));
       return { ok: true };
     } catch {
       this.clearCookies(res);
@@ -108,8 +112,7 @@ export class AuthController {
    * refresh cookie is scoped to /auth, so it travels only to the one endpoint
    * that needs it rather than on every API request.
    */
-  private setCookies(res: Response, tokens: TokenPair): void {
-    const secure = process.env.NODE_ENV === 'production';
+  private setCookies(res: Response, tokens: TokenPair, secure: boolean): void {
     res.cookie(ACCESS_COOKIE, tokens.accessToken, {
       httpOnly: true,
       sameSite: 'lax',
@@ -129,5 +132,12 @@ export class AuthController {
   private clearCookies(res: Response): void {
     res.clearCookie(ACCESS_COOKIE, { path: '/' });
     res.clearCookie(REFRESH_COOKIE, { path: '/auth' });
+  }
+
+  /** Keep localhost sessions usable over HTTP while preserving Secure cookies behind HTTPS. */
+  private isSecureRequest(req: Request): boolean {
+    const forwarded = req.headers['x-forwarded-proto'];
+    const protocol = Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(',')[0]?.trim();
+    return protocol === 'https' || req.secure;
   }
 }

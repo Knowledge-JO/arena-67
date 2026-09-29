@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  Delete,
   Controller,
   Get,
   HttpCode,
@@ -27,6 +28,15 @@ export class MemoryController {
   @HttpCode(201)
   create(@CurrentUser() user: AuthedUser) {
     return this.conversations.create(user.id);
+  }
+
+  @Delete('conversations/:id')
+  @HttpCode(204)
+  async delete(
+    @CurrentUser() user: AuthedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ): Promise<void> {
+    await this.conversations.delete(user.id, id);
   }
 
   @Get('conversations/:id/messages')
