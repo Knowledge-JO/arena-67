@@ -239,6 +239,24 @@ function Arena({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
     }
   };
 
+  const deleteConversation = async (id: string) => {
+    if (busy || !window.confirm('Delete this conversation? This cannot be undone.')) return;
+    setBusy(true);
+    try {
+      await api.deleteConversation(id);
+      setConversations((current) => current.filter((conversation) => conversation.id !== id));
+      if (id === conversationId) {
+        setConversationId(null);
+        setEntries([]);
+        setSpent(new Set());
+      }
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const newConversation = () => {
     if (busy) return;
     // Created lazily by the first message, so an abandoned "new" leaves no
@@ -483,6 +501,7 @@ function Arena({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
           activeId={conversationId}
           onSelect={(id) => void openConversation(id)}
           onNew={newConversation}
+          onDelete={(id) => void deleteConversation(id)}
           disabled={busy}
         />
       </aside>

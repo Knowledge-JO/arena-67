@@ -66,6 +66,14 @@ export class ConversationService {
     return row;
   }
 
+  async delete(userId: string, conversationId: string): Promise<void> {
+    const [row] = await this.db
+      .delete(conversations)
+      .where(and(eq(conversations.id, conversationId), eq(conversations.userId, userId)))
+      .returning({ id: conversations.id });
+    if (!row) throw new NotFoundException('Conversation not found.');
+  }
+
   /** Throws unless this conversation belongs to this user. */
   async assertOwned(userId: string, conversationId: string): Promise<void> {
     const row = await this.db.query.conversations.findFirst({

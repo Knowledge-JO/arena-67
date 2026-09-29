@@ -1,6 +1,6 @@
 'use client';
 
-import { MessageSquare, Plus } from 'lucide-react';
+import { MessageSquare, Plus, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ConversationSummary } from '@/lib/types';
 
@@ -9,12 +9,14 @@ export function ConversationList({
   activeId,
   onSelect,
   onNew,
+  onDelete,
   disabled,
 }: {
   conversations: ConversationSummary[];
   activeId: string | null;
   onSelect: (id: string) => void;
   onNew: () => void;
+  onDelete: (id: string) => void;
   disabled?: boolean;
 }) {
   return (
@@ -39,22 +41,33 @@ export function ConversationList({
           </p>
         )}
         {conversations.map((c) => (
-          <button
+          <div
             key={c.id}
-            type="button"
-            disabled={disabled}
-            onClick={() => onSelect(c.id)}
             className={cn(
-              'mb-0.5 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors',
-              c.id === activeId
-                ? 'bg-surface-raised text-fg'
-                : 'text-fg-muted hover:bg-surface-raised/60 hover:text-fg',
-              'disabled:opacity-60',
+              'group mb-0.5 flex w-full items-center rounded-lg text-xs transition-colors',
+              c.id === activeId ? 'bg-surface-raised text-fg' : 'text-fg-muted hover:bg-surface-raised/60 hover:text-fg',
             )}
           >
-            <MessageSquare size={12} className="shrink-0 opacity-60" />
-            <span className="truncate">{c.title}</span>
-          </button>
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onSelect(c.id)}
+              className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left disabled:opacity-60"
+            >
+              <MessageSquare size={12} className="shrink-0 opacity-60" />
+              <span className="truncate">{c.title}</span>
+            </button>
+            <button
+              type="button"
+              disabled={disabled}
+              aria-label={`Delete ${c.title}`}
+              title="Delete conversation"
+              onClick={() => onDelete(c.id)}
+              className="mr-1 rounded p-1.5 text-fg-subtle opacity-0 transition-opacity hover:bg-negative/10 hover:text-negative focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 group-hover:opacity-100 disabled:pointer-events-none"
+            >
+              <Trash2 size={12} />
+            </button>
+          </div>
         ))}
       </nav>
     </div>
